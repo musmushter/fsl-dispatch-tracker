@@ -26,26 +26,29 @@
            overflow: hidden; text-overflow: ellipsis; }
   th { color: var(--muted); font-weight: 600; font-size: 12px; }
   /* column widths: percentages so the table always fits the viewport */
+  #rows td:nth-child(1), #rows td:nth-child(8), #rows td:nth-child(9) { white-space: normal; }
+  #rows td:nth-child(9) { word-break: break-word; }
   #rows th:nth-child(1), #rows td:nth-child(1) { width: 12%; }   /* Driver */
-  #rows th:nth-child(2), #rows td:nth-child(2) { width: 6%; }    /* Call */
-  #rows th:nth-child(3), #rows td:nth-child(3) { width: 10%; }   /* Type */
-  #rows th:nth-child(4), #rows td:nth-child(4) { width: 9%; }    /* Status */
-  #rows th:nth-child(5), #rows td:nth-child(5) { width: 9%; }    /* Movement */
-  #rows th:nth-child(6), #rows td:nth-child(6) { width: 6%; }    /* In status */
+  #rows th:nth-child(2), #rows td:nth-child(2) { width: 5%; }    /* Call */
+  #rows th:nth-child(3), #rows td:nth-child(3) { width: 9%; }   /* Type */
+  #rows th:nth-child(4), #rows td:nth-child(4) { width: 8%; }    /* Status */
+  #rows th:nth-child(5), #rows td:nth-child(5) { width: 7%; }    /* Movement */
+  #rows th:nth-child(6), #rows td:nth-child(6) { width: 5%; }    /* In status */
   #rows th:nth-child(7), #rows td:nth-child(7) { width: 10%; }   /* ETA */
-  #rows th:nth-child(8), #rows td:nth-child(8) { width: 12%; }   /* Vehicle */
-  #rows th:nth-child(9), #rows td:nth-child(9) { width: 13%; }   /* Address */
-  #rows th:nth-child(10), #rows td:nth-child(10) { width: 4%; }  /* Dist */
-  #rows th:nth-child(11), #rows td:nth-child(11) { width: 4%; }  /* GPS age */
-  #rows th:nth-child(12), #rows td:nth-child(12) { width: 9%; }  /* Flags */
+  #rows th:nth-child(8), #rows td:nth-child(8) { width: 11%; }   /* Vehicle */
+  #rows th:nth-child(9), #rows td:nth-child(9) { width: 15%; }   /* Address */
+  #rows th:nth-child(10), #rows td:nth-child(10) { width: 3%; }  /* Dist */
+  #rows th:nth-child(11), #rows td:nth-child(11) { width: 3%; }  /* GPS age */
+  #rows td:nth-child(12) { white-space: normal; }
+  #rows th:nth-child(12), #rows td:nth-child(12) { width: 5%; }  /* Flags */
   #rows th:nth-child(13), #rows td:nth-child(13) { width: 7%; }  /* Report btn */
   #clearedwrap th:nth-child(1), #clearedwrap td:nth-child(1) { width: 7%; }  /* Cleared */
   #clearedwrap th:nth-child(2), #clearedwrap td:nth-child(2) { width: 6%; }  /* Call */
   #clearedwrap th:nth-child(3), #clearedwrap td:nth-child(3) { width: 11%; } /* Member */
-  #clearedwrap th:nth-child(4), #clearedwrap td:nth-child(4) { width: 10%; } /* Phone */
+  #clearedwrap th:nth-child(4), #clearedwrap td:nth-child(4) { width: 12%; } /* Phone */
   #clearedwrap th:nth-child(5), #clearedwrap td:nth-child(5) { width: 8%; }  /* Benefit */
   #clearedwrap th:nth-child(6), #clearedwrap td:nth-child(6) { width: 10%; } /* Type */
-  #clearedwrap th:nth-child(7), #clearedwrap td:nth-child(7) { width: 13%; } /* Vehicle */
+  #clearedwrap th:nth-child(7), #clearedwrap td:nth-child(7) { width: 15%; } /* Vehicle */
   #clearedwrap th:nth-child(8), #clearedwrap td:nth-child(8) { width: 10%; } /* Driver */
   #clearedwrap th:nth-child(9), #clearedwrap td:nth-child(9) { width: 9%; }  /* Waited */
   #clearedwrap th:nth-child(10), #clearedwrap td:nth-child(10) { width: 6%; }/* On scene */
