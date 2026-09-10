@@ -24,12 +24,22 @@ import urllib.request
 
 import websockets
 
+# Windows Pythons ship no timezone database; the `tzdata` pip package fills
+# the gap. Import order: pip tzdata -> system db -> fail with a fix hint.
+try:
+    import tzdata  # noqa: F401  (registers its zoneinfo key)
+except ImportError:
+    pass
+try:
+    ZONE = ZoneInfo("America/Chicago")
+except Exception:
+    print("FATAL: no timezone database. Fix:  pip install tzdata", flush=True)
+    raise SystemExit(1)
+
 BASE = r"C:/Users/musta/fsl_tracker"
 STATE_FILE = BASE + r"/state.json"
 EVENTS_FILE = BASE + r"/events.jsonl"
 ALERT_SOUND_PS = BASE + r"/toast.ps1"
-
-ZONE = ZoneInfo("America/Chicago")
 
 # ---------------- alert configuration ----------------
 DISPATCH_OVERDUE_MIN = 10      # Dispatched > 10 min without En Route

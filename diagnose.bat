@@ -21,6 +21,11 @@ if errorlevel 1 (
     echo     FAIL: websockets missing. Fix: %PYEXE% -m pip install websockets
     goto end
 )
+%PYEXE% -c "import tzdata; print('    tzdata OK')" 2>&1
+if errorlevel 1 (
+    echo     FAIL: tzdata missing. Fix: %PYEXE% -m pip install tzdata
+    goto end
+)
 echo.
 echo [3] Files:
 if not exist tracker.py (echo     FAIL: tracker.py missing in %cd% & goto end)

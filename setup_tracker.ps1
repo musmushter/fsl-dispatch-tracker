@@ -86,8 +86,8 @@ if (-not $chrome) { Write-Host "Chrome install FAILED - install manually then re
 Write-Host "  found: $chrome"
 
 # ---------- 3. websockets ----------
-Say "Installing Python packages (websockets)..."
-Invoke-Expression "$pythonExe -m pip install --quiet websockets"
+Say "Installing Python packages (websockets, tzdata)..."
+Invoke-Expression "$pythonExe -m pip install --quiet websockets tzdata"
 Write-Host "  done."
 
 # ---------- 4. rewrite the .bat launchers for THIS machine ----------
