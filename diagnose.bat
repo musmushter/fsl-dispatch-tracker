@@ -31,6 +31,9 @@ echo [3] Files:
 if not exist tracker.py (echo     FAIL: tracker.py missing in %cd% & goto end)
 echo     tracker.py found in %cd%
 echo.
+echo [3b] Console Chrome (debug port 9222):
+powershell -NoProfile -Command "try { (Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 'http://127.0.0.1:9222/json/version').StatusCode | Out-Null; Write-Host '    OK: Chrome debug port reachable' } catch { Write-Host '    NOT REACHABLE - start_chrome.bat must run FIRST and stay open' }"
+echo.
 echo [4] Starting tracker IN THIS WINDOW (errors will show here):
 echo ------------------------------------------------------------
 %PYEXE% tracker.py

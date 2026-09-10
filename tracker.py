@@ -898,8 +898,18 @@ async def run():
     sessions = {}
     req_meta = {}
 
-    with urllib.request.urlopen("http://127.0.0.1:9222/json/version", timeout=5) as r:
-        ws_url = json.load(r)["webSocketDebuggerUrl"]
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:9222/json/version",
+                                    timeout=5) as r:
+            ws_url = json.load(r)["webSocketDebuggerUrl"]
+    except Exception:
+        print("=" * 60, flush=True)
+        print("CANNOT REACH THE CONSOLE CHROME on port 9222.", flush=True)
+        print("Fix: double-click start_chrome.bat, then log in to the", flush=True)
+        print("dispatch console in that window. Keep it OPEN. Then", flush=True)
+        print("restart this tracker (start_tracker.bat).", flush=True)
+        print("=" * 60, flush=True)
+        raise SystemExit(1)
 
     async with websockets.connect(ws_url, max_size=256 * 1024 * 1024,
                                   ping_interval=20) as ws:
