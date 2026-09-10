@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>FSL Tracker</title>
+<style>
+  :root { --fg:#e8e8e8; --bg:#14161a; --card:#1e2127; --border:#33373f;
+          --red:#e5484d; --amber:#f5a623; --green:#46a758; --muted:#8b909c; }
+  * { box-sizing: border-box; }
+  body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--fg);
+         margin: 0; padding: 14px; font-size: 13px; }
+  h1 { font-size: 15px; margin: 0 0 4px; display:flex; align-items:center; gap:10px; }
+  .meta { color: var(--muted); margin-bottom: 10px; }
+  .alerts { margin-bottom: 12px; }
+  .alert { padding: 8px 12px; border-radius: 6px; margin-bottom: 6px; font-weight: 600;
+           border-left: 4px solid; }
+  .alert.urgent { background:#3a1517; border-color: var(--red); }
+  .alert.minor  { background:#3a2f14; border-color: var(--amber); }
+  .alert .d { font-weight: 400; color: var(--muted); margin-left: 6px; }
+  table { width: 100%; border-collapse: collapse; background: var(--card);
+          border-radius: 6px; overflow: hidden; }
+  th, td { padding: 6px 9px; text-align: left; border-bottom: 1px solid var(--border);
+           white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  tr.alarm td { background: #3a1517; }
+  tr.warn td { background: #33290f; }
+  .flag { display: inline-block; padding: 1px 7px; border-radius: 9px; font-size: 11px;
+          font-weight: 700; margin-right: 3px; }
+  .flag.r { background: var(--red); color: white; }
+  .flag.y { background: var(--amber); color: #1a1a1a; }
+  .st { padding: 1px 8px; border-radius: 9px; font-size: 11px; font-weight: 600; }
+  .st-dispatched { background:#e5484d22; color:#ff7d81; }
+  .st-enroute { background:#228b2222; color:#6cd96c; }
+  .st-onlocation, .st-tow { background:#3a6ea522; color:#7ab3e8; }
+  .st-scheduled { background:#8b909c22; color:#b9bec7; }
+  .st-spotted { background:#f5a62322; color:#ffc35c; }
+  .stale { color: var(--red); font-weight: 700; }
+  .ok { color: var(--green); }
+  .mv { padding: 1px 8px; border-radius: 9px; font-size: 11px; font-weight: 700; }
+  .mv-go { background:#228b2222; color:#6cd96c; }
+  .mv-still { background:#e5484d22; color:#ff7d81; }
+  .mv-loc { background:#3a6ea522; color:#7ab3e8; }
+  #conn { font-size: 11px; padding: 2px 8px; border-radius: 9px; }
+  .conn-ok { background:#228b2233; color:#6cd96c; }
+  .conn-bad { background:#e5484d33; color:#ff7d81; }
+  h2 { font-size: 13px; margin: 18px 0 6px; color: var(--muted); }
+  #clearedwrap td { color: #c9cdd6; }
+  tr.canceled td { background:#3a2f14; color:#b9a77c; }
+  tr.canceled td b { text-decoration: line-through; }
+  .repbtn { padding: 2px 10px; background: var(--card); color: var(--fg);
+            border: 1px solid var(--border); border-radius: 5px; cursor: pointer;
+            font-size: 11px; }
+  .repbtn:hover { border-color: var(--amber); color: var(--amber); }
+  .repbtn.copied { border-color: var(--green); color: var(--green); }
+</style>
+</head>
+<body>
+<h1>FSL Dispatch Tracker <span id="conn" class="conn-bad">connecting</span></h1>
+<div class="meta" id="meta">loading...</div>
+<div class="alerts" id="alerts"></div>
+<table>
+<thead><tr>
+  <th>Driver</th><th>Call</th><th>Type</th><th>Status</th><th>Movement</th><th>In status</th>
+  <th>Sched start</th><th>ETA (from feed)</th><th>Vehicle</th><th>Address</th><th>Dist (km)</th><th>GPS age</th><th>Flags</th><th></th>
+</tr></thead>
+<tbody id="rows"></tbody>
+</table>
+<h2>Callback</h2>
+<table id="clearedwrap">
+<thead><tr>
+  <th>Cleared</th><th>Call</th><th>Member</th><th>Member phone</th><th>Benefit level</th>
+  <th>Type</th><th>Vehicle</th><th>Driver</th><th>Member waited</th><th>On scene</th><th></th>
+</tr></thead>
+<tbody id="cleared"></tbody>
+</table>
+<button id="loadmore" style="margin:8px 0 20px; padding:6px 14px; background:var(--card);
+  color:var(--fg); border:1px solid var(--border); border-radius:6px; cursor:pointer;
+  font-size:12px;" onclick="loadMore()">Load more</button>
+<script>
+const fmtMin = m => m == null ? '–' : (m >= 60 ? Math.floor(m/60)+'h '+Math.round(m%60)+'m' : Math.round(m)+' min');
+function render(s) {
+  const conn = document.getElementById('conn');
+  const age = s.last_data_age_s;
+  const ok = age != null && age < 90;
+  conn.textContent = ok ? 'live' : 'no data ' + (age==null?'–':Math.round(age)+'s');
+  conn.className = ok ? 'conn-ok' : 'conn-bad';
+  document.getElementById('meta').textContent =
+    'Central ' + s.generated_central + ' | ' + s.rows.length + ' active drivers | updated ' +
+    new Date(s.generated_at).toLocaleTimeString();
+  const al = document.getElementById('alerts');
+  al.innerHTML = '';
+  (s.alerts||[]).forEach(a => {
+    const d = document.createElement('div');
+    d.className = 'alert ' + (a.level==='urgent'?'urgent':'minor');
+    d.innerHTML = '<b>' + a.type + '</b> — ' + a.driver + ' <span class="d">' + a.detail + '</span>';
+    al.appendChild(d);
+  });
+  const tb = document.getElementById('rows');
+  tb.innerHTML = '';
+  (s.rows||[]).forEach(r => {
+    const tr = document.createElement('tr');
+    const urgent = (r.alerts||[]).some(t => t!=='MEMBER_WAITING');
+    const warn = (r.alerts||[]).includes('MEMBER_WAITING');
+    if (urgent) tr.className = 'alarm'; else if (warn) tr.className = 'warn';
+    const st = (r.status||'').toLowerCase().replace(' ','');
+    const stCls = st.startsWith('dispatched')?'st-dispatched':st.startsWith('enroute')?'st-enroute':
+                  st.startsWith('onlocation')||st.startsWith('tow')||st.startsWith('intow')?'st-onlocation':
+                  st.startsWith('spotted')?'st-spotted':'st-scheduled';
+    const flags = (r.alerts||[]).map(t =>
+      '<span class="flag ' + (t==='MEMBER_WAITING'?'y':'r') + '">' +
+      (t==='DISPATCH_OVERDUE'?'DISPATCH>10m':t==='STANDING_STILL'?'STILL>10m':
+       t==='FAR_AWAY'?'FAR>5km':t==='ETA_EXPIRED'?'ETA LATE':'WAIT>60m') + '</span>').join('');
+    const gpsAge = r.gps_age_min == null ? '–' :
+      (r.gps_age_min > 10 ? '<span class="stale">' + r.gps_age_min + 'm</span>' :
+       '<span class="ok">' + r.gps_age_min + 'm</span>');
+    tr.innerHTML =
+      '<td>' + (r.driver||'').split('(')[0] + '</td>' +
+      '<td><b>' + (r.call_id||'') + '</b>' + (r.chain_second ? ' <span class="mv mv-still" title="Second leg of a tow pair — its Dispatched status is stale bookkeeping">2nd</span>' : '') + '</td>' +
+      '<td>' + (r.work_type||'') + '</td>' +
+      '<td><span class="st ' + stCls + '">' + (r.status||'') + '</span></td>' +
+      '<td>' + (r.moving === 'MOVING' ? '<span class="mv mv-go">MOVING</span>'
+              : r.moving === 'STANDSTILL' ? '<span class="mv mv-still">STANDSTILL</span>'
+              : r.moving === 'AT LOC' ? '<span class="mv mv-loc">AT LOC</span>'
+              : r.moving === 'AT DROP OFF' ? '<span class="mv mv-loc">AT DROP OFF</span>'
+              : '–') + '</td>' +
+      '<td>' + fmtMin(r.status_min) + '</td>' +
+      '<td>' + (r.sched_start||'') + '</td>' +
+      '<td>' + (r.eta ? r.eta + (r.eta_stale ? ' <span class="stale">*</span>' : '') : '–') + '</td>' +
+      '<td>' + (r.vehicle||'') + '</td>' +
+      '<td>' + (r.address||'') + '</td>' +
+      '<td>' + (r.dist_km==null?'–':r.dist_km) + '</td>' +
+      '<td>' + gpsAge + '</td>' +
+      '<td>' + flags + '</td>' +
+      '<td><button class="repbtn">Report</button></td>';
+    const rbtn = tr.querySelector('.repbtn');
+    rbtn.rowData = {d:(r.driver||'').split('(')[0].trim(), c:r.call_id||'',
+                    s:r.status||'', m:Math.round(r.status_min||0),
+                    e:r.eta||'', lo:r.eta_low, hi:r.eta_high,
+                    mv:r.moving||'', mm:r.moving_min, km:r.dist_km,
+                    g:r.gps_age_min, cs:r.chain_second||false};
+    rbtn.addEventListener('click', function() { copyReport(this, this.rowData); });
+    tb.appendChild(tr);
+  });
+  const cl = document.getElementById('cleared');
+  cl.innerHTML = '';
+  const shown = (s.cleared||[]).slice(0, window.clearedLimit || 20);
+  shown.forEach(c => {
+    const driver = (c.driver||'–').split('(')[0].trim();
+    const tr = document.createElement('tr');
+    if (c.canceled) tr.className = 'canceled';
+    tr.innerHTML =
+      '<td>' + (c.cleared_at||'') + '</td>' +
+      '<td><b>' + (c.call_id||'') + '</b></td>' +
+      '<td>' + (c.member_name||'–') + '</td>' +
+      '<td>' + (c.phone||'–') + '</td>' +
+      '<td>' + (c.benefit||'–') + '</td>' +
+      '<td>' + (c.work_type||'–') + '</td>' +
+      '<td>' + (c.vehicle||'–') + '</td>' +
+      '<td>' + driver + '</td>' +
+      '<td>' + (c.wait_min==null ? '–' : fmtMin(c.wait_min)) + '</td>' +
+      '<td>' + (c.onscene_min==null ? '–' : fmtMin(c.onscene_min)) + '</td>' +
+      '<td>' + (c.canceled ? '<span class="flag r">CANCELED</span>' : '') + '</td>';
+    cl.appendChild(tr);
+  });
+  document.getElementById('loadmore').style.display =
+    (s.cleared||[]).length > shown.length ? '' : 'none';
+}
+window.clearedLimit = 20;
+function loadMore() { window.clearedLimit += 20; poll(); }
+// ---- report ----
+// "Paul 517450 Dispatched for 10 mins no ETA not answering and not moving on map"
+function buildReport(r) {
+  const parts = [r.d, r.c, r.s + ' for ' + r.m + ' mins'];
+  // ETA: from the raw epoch window (lo/hi). Minutes until the window STARTS;
+  // once inside the window: 'arriving now'; past the window: LATE format.
+  const lateMin = (r.lo && r.hi) ? Math.round((Date.now() - r.hi) / 60000) : null;
+  const late = lateMin != null && lateMin > 0;
+  if (late) {
+    // late ETA: drop the ETA + not answering parts, multi-line format below
+  } else if (r.lo && r.hi && !r.cs) {
+    const mins = Math.round((r.lo - Date.now()) / 60000);
+    if (mins > 0) parts.push('ETA ' + mins + ' mins');
+    else if (r.hi > Date.now()) parts.push('ETA arriving now');
+    else parts.push('no ETA');
+  } else parts.push('no ETA');
+  if (!late) {
+    const tail = [];
+    // always include — delete manually on the rare exceptions
+    tail.push('not answering');
+    // not moving: only meaningful for En Route ('not moving for 10 mins').
+    // Dispatched standstill is just the lingering pre-response state —
+    // 'not moving on map' says it.
+    if (r.mv === 'STANDSTILL' && r.s === 'En Route') {
+      const still = (r.mm != null && r.mm >= 3) ? r.mm : r.m;
+      tail.push('not moving for ' + still + ' mins');
+    }
+    else if (r.mv === 'STANDSTILL' && r.s === 'Dispatched') {
+      tail.push('not moving on map');
+    }
+    else if ((r.mv === 'MOVING' && r.s === 'Dispatched')
+             || ((r.mv === 'AT LOC' || r.mv === 'AT DROP OFF')
+                 && (r.s === 'Dispatched' || r.s === 'En Route')))
+      tail.push('he is moving but didn\'t change status');
+    parts.push(tail.join(' and '));
+    return parts.join(' ');
+  }
+  // ---- late-ETA format ----
+  // "Bryce 596104 ER for 33 mins
+  //  He exceeded ETA 10 mins ago and not close to srv
+  //  Mbr needs an update on ETA"
+  // 'not close to srv' only when genuinely far: > ~5 min out (~3.3 km at
+  // avg tow speed). Close = about to arrive, no point telling dispatch.
+  let lateLine = 'He exceeded ETA ' + lateMin + ' mins ago';
+  if (r.km != null && r.km > 3.3) lateLine += ' and not close to srv';
+  return parts.slice(0, 3).join(' ') + '\n' + lateLine + '\nMbr needs an update on ETA';
+}
+async function copyReport(btn, r) {
+  const text = buildReport(r);
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch(e) {
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); ta.remove();
+  }
+  const old = btn.textContent;
+  btn.textContent = 'Copied!';
+  btn.classList.add('copied');
+  setTimeout(() => { btn.textContent = old; btn.classList.remove('copied'); }, 1500);
+}
+async function poll() {
+  try {
+    const r = await fetch('state.json?v=' + Date.now());
+    render(await r.json());
+  } catch(e) { document.getElementById('conn').textContent = 'tracker offline'; }
+}
+poll(); setInterval(poll, 5000);
+</script>
+</body>
+</html>

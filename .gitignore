@@ -1,0 +1,7 @@
+# runtime data — never commit
+state.json
+events.jsonl
+tracker_stdout.log
+__pycache__/
+recon/
+*.log
