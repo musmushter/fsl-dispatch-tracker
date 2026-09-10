@@ -1319,6 +1319,21 @@ if __name__ == "__main__":
         def __init__(self, *a, **kw):
             super().__init__(*a, directory=BASE, **kw)
 
+        def do_GET(self):
+            # serve ONLY the dashboard + its own state feed; anything else
+            # (source code, logs, .git) stays private — the share link is
+            # public, so the root must never list files
+            path = self.path.split("?")[0]
+            if path in ("/", ""):
+                self.send_response(302)
+                self.send_header("Location", "/dashboard.html")
+                self.end_headers()
+                return
+            if path not in ("/dashboard.html", "/state.json"):
+                self.send_error(404, "Not found")
+                return
+            super().do_GET()
+
         def end_headers(self):
             # dashboard.html must always revalidate — stale JS = stale logic
             self.send_header("Cache-Control", "no-store, must-revalidate")
