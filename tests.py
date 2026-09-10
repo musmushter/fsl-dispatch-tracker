@@ -535,6 +535,43 @@ snap17 = st12.snapshot()
 row17 = [r for r in snap17['rows'] if r['call_id'] == '9801'][0]
 check("T17a reverse-linked pair: dropoff shown", row17['dropoff'] == '55 dealer rd, Houston')
 print()
+# T18: reassigned call — feed has TWO Dispatched posts (two drivers); the wait
+# starts from the LATEST dispatch, not the earliest
+st13 = m.State()
+now13 = m.now_ms()
+# feed: Scheduled t0, Dispatched twice (first driver 4:40, second 5:10), OnLoc 5:23
+t_sched = now13 - 120*60000
+t_d1 = now13 - 110*60000
+t_d2 = now13 - 80*60000
+t_onloc = now13 - 67*60000
+t_cleared = now13 - 52*60000
+st13.feed_times['08pT18'] = {"Scheduled": t_sched, "Dispatched": t_d2,
+                             "On Location": t_onloc, "Cleared": t_cleared}
+st13.reassigned.add('08pT18')   # parser counted 2 Dispatched/En Route posts
+svc18 = {'Id': '08pT18', 'D3_Call_ID__c': '9901', 'Status': 'Cleared',
+         'WO_Call_Type__c': 'TOW', 'Street': '1 test st',
+         'SchedStartTime': m.sf_ms_to_epoch(t_sched),
+         'LastModifiedDate': now13 - 52*60000}
+st13.ingest_service({'Resource': '0HP18', 'ResourceName': 'Reassign Tester',
+                     'Fields': {'s': 1, 'v': svc18}})
+st13.services['08pT18']['cleared_at'] = t_cleared
+clog18 = st13.cleared_log()
+row18 = [c for c in clog18 if c['call_id'] == '9901'][0]
+# waited = OnLoc(67min ago) - latest Dispatch(80min ago) = 13 min (not 110-67=43)
+check("T18 reassigned: wait from LATEST dispatch (13 min)", row18['wait_min'] == 13)
+# control: single-dispatch call still uses earliest (Scheduled)
+st14 = m.State()
+st14.feed_times['08pT19'] = {"Scheduled": t_sched, "Dispatched": t_d1,
+                             "On Location": t_onloc, "Cleared": t_cleared}
+st14.ingest_service({'Resource': '0HP19', 'ResourceName': 'Normal Tester',
+                     'Fields': {'s': 1, 'v': dict(svc18, Id='08pT19', D3_Call_ID__c='9902')}})
+st14.services['08pT19']['cleared_at'] = t_cleared
+clog19 = st14.cleared_log()
+row19 = [c for c in clog19 if c['call_id'] == '9902'][0]
+# normal: waited = OnLoc - Scheduled = 120-67 = 53
+check("T19 normal call: wait from Scheduled (53 min)", row19['wait_min'] == 53)
+
+print()
 print()
 print(f"{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)

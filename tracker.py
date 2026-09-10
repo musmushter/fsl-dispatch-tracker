@@ -105,13 +105,15 @@ SA_CHANGE_RE = re.compile(r"changed\s+Status\s+from\s+([^.<|]+?)\s+to\s+([^.<|]+
 
 
 def parse_status_times_from_feed(body):
-    """SA chatter feed -> {status: epoch_ms} of the newest 'changed Status
-    ... to X' post per status (exact times even for services cleared before
-    the tracker was watching)."""
+    """SA chatter feed -> ({status: epoch_ms}, reassigned:int). Times are the
+    newest 'changed Status ... to X' post per status. `reassigned` counts
+    Dispatched/En Route posts: >1 means the call changed hands (the member's
+    wait restarts at the latest dispatch)."""
     clean = re.sub(r"<script.*?</script>", " ", body, flags=re.S)
     clean = re.sub(r"<[^>]+>", " ", clean)
     clean = clean.replace("&nbsp;", " ")
     out = {}
+    reassigned = 0
     for m in SA_CHANGE_RE.finditer(clean):
         status = m.group(2).strip()
         tm = FEED_TIME_RE.search(clean, m.end(), m.end() + 400)
@@ -126,7 +128,9 @@ def parse_status_times_from_feed(body):
         # keep the newest post per status
         if status not in out or posted > out[status]:
             out[status] = posted
-    return out
+        if status in ("Dispatched", "En Route"):
+            reassigned += 1
+    return out, reassigned
 
 
 def eta_ok(body):
@@ -253,6 +257,7 @@ class State:
         self.feed_time_fetch = {}  # sa_id -> last attempt ts
         self.dropoff_cache = {}     # sa_id -> "street, city" from lightbox
         self.dropoff_fetch = {}     # sa_id -> last attempt ts
+        self.reassigned = set()     # sa_ids whose feed shows >1 dispatch/enroute
         self.last_movement = {} # resource_id -> "MOVING" | "STANDSTILL" | None
 
     def log_event(self, kind, **kw):
@@ -713,8 +718,13 @@ class State:
             # SA feed ground truth or a flip the tracker watched live.
             starts = [merged[k] for k in ("Spotted", "Scheduled", "Dispatched")
                       if merged.get(k)]
+            # reassigned calls carry MULTIPLE Dispatched posts (one per driver);
+            # the member's wait began with the LATEST dispatch, not the first
             if arrived and starts:
-                wait = round(max(0.0, (arrived - min(starts)) / 60000))
+                if s["sa_id"] in self.reassigned:
+                    wait = round(max(0.0, (arrived - max(starts)) / 60000))
+                else:
+                    wait = round(max(0.0, (arrived - min(starts)) / 60000))
             elif arrived and s.get("arrived_live") and s.get("sched_start"):
                 wait = round(max(0.0, (arrived - s["sched_start"]) / 60000))
             else:
@@ -764,7 +774,16 @@ class State:
             if (s.get("related") == svc["sa_id"]
                     and s.get("reltype") == "Immediately Follow"):
                 return s
-        return None
+        # last resort: same driver + same call, exactly one other leg = pair
+        # (the partner may already be cleared — the drop-off address is still
+        # valid and it stops the dropoff from flashing then vanishing when the
+        # followed leg flips)
+        cands = [s for s in self.services.values()
+                 if s["sa_id"] != svc["sa_id"]
+                 and s.get("resource_id") == svc.get("resource_id")
+                 and s.get("call_id") and s.get("call_id") == svc.get("call_id")
+                 and not self.future_day(s)]
+        return cands[0] if len(cands) == 1 else None
 
     def _dropoff_of(self, svc):
         """Tow pair drop-off address = the mate leg's street/city. Only pairs
@@ -1314,15 +1333,18 @@ async def run():
                             "/ACEContractorCommunity/apex/"
                             "fsl__vf0993_servicechatter?id=" + job["sa_id"])
                         if body:
-                            times = parse_status_times_from_feed(body)
+                            times, reassigned = parse_status_times_from_feed(body)
                             if times:
                                 state.feed_times[job["sa_id"]] = times
+                                if reassigned > 1:
+                                    state.reassigned.add(job["sa_id"])
                                 state.log_event("feed_times",
                                                 sa_id=job["sa_id"],
                                                 call_id=job.get("call_id"),
                                                 sched=times.get("Scheduled"),
                                                 onsite=times.get("On Location"),
-                                                cleared=times.get("Cleared"))
+                                                cleared=times.get("Cleared"),
+                                                reassigned=reassigned)
                         job = None
                         await asyncio.sleep(1)
                 except Exception:
