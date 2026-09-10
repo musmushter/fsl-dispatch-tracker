@@ -7,9 +7,11 @@
   :root { --fg:#e8e8e8; --bg:#14161a; --card:#1e2127; --border:#33373f;
           --red:#e5484d; --amber:#f5a623; --green:#46a758; --muted:#8b909c; }
   * { box-sizing: border-box; }
+  html, body { width: 100%; max-width: 100%; overflow-x: hidden; }
   body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--fg);
          margin: 0; padding: 14px; font-size: 13px; }
-  h1 { font-size: 15px; margin: 0 0 4px; display:flex; align-items:center; gap:10px; }
+  h1 { font-size: 15px; margin: 0 0 4px; display:flex; align-items:center; gap:10px;
+       flex-wrap: wrap; }
   .meta { color: var(--muted); margin-bottom: 10px; }
   .alerts { margin-bottom: 12px; }
   .alert { padding: 8px 12px; border-radius: 6px; margin-bottom: 6px; font-weight: 600;
@@ -17,11 +19,37 @@
   .alert.urgent { background:#3a1517; border-color: var(--red); }
   .alert.minor  { background:#3a2f14; border-color: var(--amber); }
   .alert .d { font-weight: 400; color: var(--muted); margin-left: 6px; }
-  table { width: 100%; border-collapse: collapse; background: var(--card);
-          border-radius: 6px; overflow: hidden; }
+  .tblwrap { width: 100%; overflow-x: auto; }
+  table { width: 100%; table-layout: fixed; border-collapse: collapse;
+          background: var(--card); border-radius: 6px; overflow: hidden; }
   th, td { padding: 6px 9px; text-align: left; border-bottom: 1px solid var(--border);
-           white-space: nowrap; }
+           overflow: hidden; text-overflow: ellipsis; }
   th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  /* column widths: percentages so the table always fits the viewport */
+  #rows th:nth-child(1), #rows td:nth-child(1) { width: 12%; }   /* Driver */
+  #rows th:nth-child(2), #rows td:nth-child(2) { width: 6%; }    /* Call */
+  #rows th:nth-child(3), #rows td:nth-child(3) { width: 10%; }   /* Type */
+  #rows th:nth-child(4), #rows td:nth-child(4) { width: 9%; }    /* Status */
+  #rows th:nth-child(5), #rows td:nth-child(5) { width: 9%; }    /* Movement */
+  #rows th:nth-child(6), #rows td:nth-child(6) { width: 6%; }    /* In status */
+  #rows th:nth-child(7), #rows td:nth-child(7) { width: 10%; }   /* ETA */
+  #rows th:nth-child(8), #rows td:nth-child(8) { width: 12%; }   /* Vehicle */
+  #rows th:nth-child(9), #rows td:nth-child(9) { width: 13%; }   /* Address */
+  #rows th:nth-child(10), #rows td:nth-child(10) { width: 4%; }  /* Dist */
+  #rows th:nth-child(11), #rows td:nth-child(11) { width: 4%; }  /* GPS age */
+  #rows th:nth-child(12), #rows td:nth-child(12) { width: 9%; }  /* Flags */
+  #rows th:nth-child(13), #rows td:nth-child(13) { width: 7%; }  /* Report btn */
+  #clearedwrap th:nth-child(1), #clearedwrap td:nth-child(1) { width: 7%; }  /* Cleared */
+  #clearedwrap th:nth-child(2), #clearedwrap td:nth-child(2) { width: 6%; }  /* Call */
+  #clearedwrap th:nth-child(3), #clearedwrap td:nth-child(3) { width: 11%; } /* Member */
+  #clearedwrap th:nth-child(4), #clearedwrap td:nth-child(4) { width: 10%; } /* Phone */
+  #clearedwrap th:nth-child(5), #clearedwrap td:nth-child(5) { width: 8%; }  /* Benefit */
+  #clearedwrap th:nth-child(6), #clearedwrap td:nth-child(6) { width: 10%; } /* Type */
+  #clearedwrap th:nth-child(7), #clearedwrap td:nth-child(7) { width: 13%; } /* Vehicle */
+  #clearedwrap th:nth-child(8), #clearedwrap td:nth-child(8) { width: 10%; } /* Driver */
+  #clearedwrap th:nth-child(9), #clearedwrap td:nth-child(9) { width: 9%; }  /* Waited */
+  #clearedwrap th:nth-child(10), #clearedwrap td:nth-child(10) { width: 6%; }/* On scene */
+  #clearedwrap th:nth-child(11), #clearedwrap td:nth-child(11) { width: 6%; }/* flag */
   tr.alarm td { background: #3a1517; }
   tr.warn td { background: #33290f; }
   .flag { display: inline-block; padding: 1px 7px; border-radius: 9px; font-size: 11px;
@@ -60,6 +88,7 @@
 </h1>
 <div class="meta" id="meta">loading...</div>
 <div class="alerts" id="alerts"></div>
+<div class="tblwrap">
 <table>
 <thead><tr>
   <th>Driver</th><th>Call</th><th>Type</th><th>Status</th><th>Movement</th><th>In status</th>
@@ -67,7 +96,9 @@
 </tr></thead>
 <tbody id="rows"></tbody>
 </table>
+</div>
 <h2>Callback</h2>
+<div class="tblwrap">
 <table id="clearedwrap">
 <thead><tr>
   <th>Cleared</th><th>Call</th><th>Member</th><th>Member phone</th><th>Benefit level</th>
