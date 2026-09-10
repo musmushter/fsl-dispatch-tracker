@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>FSL Tracker v2.1</title>
+<title>FSL Tracker v2.2</title>
 <style>
   :root { --fg:#e8e8e8; --bg:#14161a; --card:#1e2127; --border:#33373f;
           --red:#e5484d; --amber:#f5a623; --green:#46a758; --muted:#8b909c; }
@@ -29,16 +29,16 @@
   #drivertbl td:nth-child(1), #drivertbl td:nth-child(8), #drivertbl td:nth-child(9) { white-space: normal; }
   #drivertbl td:nth-child(9) { word-break: break-word; }
   #drivertbl th:nth-child(1), #drivertbl td:nth-child(1) { width: 8%; }   /* Driver */
-  #drivertbl th:nth-child(2), #drivertbl td:nth-child(2) { width: 44px; }    /* Call */
+  #drivertbl th:nth-child(2), #drivertbl td:nth-child(2) { width: 58px; }    /* Call */
   #drivertbl th:nth-child(3), #drivertbl td:nth-child(3) { width: 10%; }   /* Type */
   #drivertbl th:nth-child(4), #drivertbl td:nth-child(4) { width: 6%; }    /* Status */
   #drivertbl th:nth-child(5), #drivertbl td:nth-child(5) { width: 6%; }    /* Movement */
-  #drivertbl th:nth-child(6), #drivertbl td:nth-child(6) { width: 52px; }    /* In status */
+  #drivertbl th:nth-child(6), #drivertbl td:nth-child(6) { width: 64px; }    /* In status */
   #drivertbl th:nth-child(7), #drivertbl td:nth-child(7) { width: 8%; }   /* ETA */
-  #drivertbl th:nth-child(8), #drivertbl td:nth-child(8) { width: 16%; }   /* Vehicle */
-  #drivertbl th:nth-child(9), #drivertbl td:nth-child(9) { width: 26%; }   /* Address */
-  #drivertbl th:nth-child(10), #drivertbl td:nth-child(10) { width: 46px; }  /* Dist */
-  #drivertbl th:nth-child(11), #drivertbl td:nth-child(11) { width: 44px; }  /* GPS age */
+  #drivertbl th:nth-child(8), #drivertbl td:nth-child(8) { width: 15%; }   /* Vehicle */
+  #drivertbl th:nth-child(9), #drivertbl td:nth-child(9) { width: 24%; }   /* Address */
+  #drivertbl th:nth-child(10), #drivertbl td:nth-child(10) { width: 52px; }  /* Dist */
+  #drivertbl th:nth-child(11), #drivertbl td:nth-child(11) { width: 56px; }  /* GPS age */
   #drivertbl td:nth-child(12) { white-space: normal; }
   #drivertbl th:nth-child(12), #drivertbl td:nth-child(12) { width: 5%; }  /* Flags */
   #drivertbl th:nth-child(13), #drivertbl td:nth-child(13) { width: 58px; }  /* Report btn */
@@ -86,7 +86,7 @@
 </style>
 </head>
 <body>
-<h1>FSL Dispatch Tracker <span style="color:#8b909c;font-size:11px">v2.1</span> <span id="conn" class="conn-bad">connecting</span>
+<h1>FSL Dispatch Tracker <span style="color:#8b909c;font-size:11px">v2.2</span> <span id="conn" class="conn-bad">connecting</span>
   <button id="bellbtn" class="repbtn" style="margin-left:auto" onclick="toggleAlerts()">🔔 Enable alerts</button>
 </h1>
 <div class="meta" id="meta">loading...</div>
