@@ -55,7 +55,9 @@
 </style>
 </head>
 <body>
-<h1>FSL Dispatch Tracker <span id="conn" class="conn-bad">connecting</span></h1>
+<h1>FSL Dispatch Tracker <span id="conn" class="conn-bad">connecting</span>
+  <button id="bellbtn" class="repbtn" style="margin-left:auto" onclick="toggleAlerts()">🔔 Enable alerts</button>
+</h1>
 <div class="meta" id="meta">loading...</div>
 <div class="alerts" id="alerts"></div>
 <table>
@@ -141,6 +143,7 @@ function render(s) {
     rbtn.addEventListener('click', function() { copyReport(this, this.rowData); });
     tb.appendChild(tr);
   });
+  notifyLoop(s);
   const cl = document.getElementById('cleared');
   cl.innerHTML = '';
   const shown = (s.cleared||[]).slice(0, window.clearedLimit || 20);
@@ -233,6 +236,52 @@ async function poll() {
     const r = await fetch('state.json?v=' + Date.now());
     render(await r.json());
   } catch(e) { document.getElementById('conn').textContent = 'tracker offline'; }
+}
+// ---- browser toast notifications (for read-only/remote viewers) ----
+// Click the bell once: the browser asks permission; after that this tab
+// shows a native notification for every new urgent alert, same text as
+// the Windows toasts. Works over the share link too.
+let notifyOn = false;
+let lastAlertKeys = '';
+function alertKey(a) { return a.type + '|' + a.driver + '|' + (a.call_id || ''); }
+function notifyLoop(s) {
+  if (!notifyOn || !s.alerts) return;
+  const urgent = s.alerts.filter(a => a.level === 'urgent');
+  const keys = urgent.map(alertKey).sort().join(';');
+  if (keys === lastAlertKeys) return;
+  const fresh = urgent.filter(a => !lastAlertKeys.includes(alertKey(a)));
+  lastAlertKeys = keys;
+  fresh.forEach(a => {
+    try {
+      const n = new Notification(a.type + ' - ' + a.driver,
+                                 { body: (a.detail || '') + ' (call ' + (a.call_id || '?') + ')',
+                                   tag: a.type + a.driver + a.call_id });
+      setTimeout(() => n.close(), 15000);
+    } catch(e) {}
+  });
+}
+function toggleAlerts() {
+  const btn = document.getElementById('bellbtn');
+  if (!notifyOn && !('Notification' in window)) {
+    alert('This browser does not support notifications. Use Chrome or Edge.');
+    return;
+  }
+  if (!notifyOn) {
+    Notification.requestPermission().then(p => {
+      if (p === 'granted') {
+        notifyOn = true;
+        btn.textContent = '🔔 Alerts ON';
+        btn.classList.add('copied');
+      } else {
+        btn.textContent = '🔔 Alerts blocked — allow in browser settings';
+      }
+    });
+  } else {
+    notifyOn = false;
+    lastAlertKeys = '';
+    btn.textContent = '🔔 Enable alerts';
+    btn.classList.remove('copied');
+  }
 }
 poll(); setInterval(poll, 5000);
 </script>

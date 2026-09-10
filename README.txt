@@ -133,3 +133,13 @@ On Location -> Cleared, both read from the SA chatter feeds (exact, not
 estimated). '–' = the feed genuinely lacks the timestamps. Canceled
 services appear flagged. RAP services and confirmed-external resources are
 excluded entirely.
+
+SHARE A READ-ONLY LINK (remote viewing)
+Double-click  share_link.bat  (tracker must be running). It prints a public
+trycloudflare.com link — anyone with it can VIEW the live dashboard from
+anywhere, no install or login. The link is temporary: it changes every time
+you run share_link.bat and dies when you close its window. To let viewers
+hear about alerts, the dashboard header has a 'Enable alerts' bell — they
+click it once, allow browser notifications, and get a popup per urgent
+alert (same text as the Windows toasts). Read-only: viewers cannot change
+anything; the link only exposes the dashboard, not your machine.
