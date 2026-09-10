@@ -256,6 +256,7 @@ class State:
         self.dropoff_cache = {}     # sa_id -> "street, city" from lightbox
         self.dropoff_fetch = {}     # sa_id -> last attempt ts
         self.last_movement = {} # resource_id -> "MOVING" | "STANDSTILL" | None
+        self.driver_order = {}  # resource_id -> console/gantt appearance order
 
     def log_event(self, kind, **kw):
         rec = {"ts": now_ms(), "kind": kind, **kw}
@@ -402,6 +403,12 @@ class State:
                     walk(v)
 
         walk(res)
+        # remember console order: the sequence resources appear in the gantt
+        # payload (the dispatch console renders them in this order)
+        for svc in found:
+            rid = unwrap(svc.get("Resource")) or (unwrap(svc.get("Fields")) or {}).get("Service_Resource__c")
+            if rid and rid not in self.driver_order:
+                self.driver_order[rid] = len(self.driver_order)
         for svc in found:
             self.ingest_service(svc)
 
@@ -872,6 +879,7 @@ class State:
                     move_state = None
             rows.append({
                 "driver": self.driver_name(rid),
+                "resource_id": rid,
                 "sa_id": svc.get("sa_id"),
                 "call_id": svc.get("call_id"),
                 "appt": svc.get("appt"),
@@ -892,7 +900,8 @@ class State:
                 "gps_age_min": round((now - pos.get("t", 0)) / 60000, 1) if pos.get("t") else None,
                 "alerts": [a["type"] for k, a in alerts.items() if a["driver_id"] == rid],
             })
-        rows.sort(key=lambda r: str(r["driver"] or ""))
+        rows.sort(key=lambda r: (self.driver_order.get(r["resource_id"], 10**6),
+                                 str(r["driver"] or "")))
         return {
             "generated_at": now,
             "generated_central": ms_to_central(now),
