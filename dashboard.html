@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>FSL Tracker</title>
+<title>FSL Tracker v2.1</title>
 <style>
   :root { --fg:#e8e8e8; --bg:#14161a; --card:#1e2127; --border:#33373f;
           --red:#e5484d; --amber:#f5a623; --green:#46a758; --muted:#8b909c; }
@@ -26,22 +26,22 @@
            overflow: hidden; text-overflow: ellipsis; }
   th { color: var(--muted); font-weight: 600; font-size: 12px; }
   /* column widths: percentages so the table always fits the viewport */
-  #rows td:nth-child(1), #rows td:nth-child(8), #rows td:nth-child(9) { white-space: normal; }
-  #rows td:nth-child(9) { word-break: break-word; }
-  #rows th:nth-child(1), #rows td:nth-child(1) { width: 8%; }   /* Driver */
-  #rows th:nth-child(2), #rows td:nth-child(2) { width: 44px; }    /* Call */
-  #rows th:nth-child(3), #rows td:nth-child(3) { width: 10%; }   /* Type */
-  #rows th:nth-child(4), #rows td:nth-child(4) { width: 6%; }    /* Status */
-  #rows th:nth-child(5), #rows td:nth-child(5) { width: 6%; }    /* Movement */
-  #rows th:nth-child(6), #rows td:nth-child(6) { width: 52px; }    /* In status */
-  #rows th:nth-child(7), #rows td:nth-child(7) { width: 8%; }   /* ETA */
-  #rows th:nth-child(8), #rows td:nth-child(8) { width: 16%; }   /* Vehicle */
-  #rows th:nth-child(9), #rows td:nth-child(9) { width: 26%; }   /* Address */
-  #rows th:nth-child(10), #rows td:nth-child(10) { width: 46px; }  /* Dist */
-  #rows th:nth-child(11), #rows td:nth-child(11) { width: 44px; }  /* GPS age */
-  #rows td:nth-child(12) { white-space: normal; }
-  #rows th:nth-child(12), #rows td:nth-child(12) { width: 5%; }  /* Flags */
-  #rows th:nth-child(13), #rows td:nth-child(13) { width: 58px; }  /* Report btn */
+  #drivertbl td:nth-child(1), #drivertbl td:nth-child(8), #drivertbl td:nth-child(9) { white-space: normal; }
+  #drivertbl td:nth-child(9) { word-break: break-word; }
+  #drivertbl th:nth-child(1), #drivertbl td:nth-child(1) { width: 8%; }   /* Driver */
+  #drivertbl th:nth-child(2), #drivertbl td:nth-child(2) { width: 44px; }    /* Call */
+  #drivertbl th:nth-child(3), #drivertbl td:nth-child(3) { width: 10%; }   /* Type */
+  #drivertbl th:nth-child(4), #drivertbl td:nth-child(4) { width: 6%; }    /* Status */
+  #drivertbl th:nth-child(5), #drivertbl td:nth-child(5) { width: 6%; }    /* Movement */
+  #drivertbl th:nth-child(6), #drivertbl td:nth-child(6) { width: 52px; }    /* In status */
+  #drivertbl th:nth-child(7), #drivertbl td:nth-child(7) { width: 8%; }   /* ETA */
+  #drivertbl th:nth-child(8), #drivertbl td:nth-child(8) { width: 16%; }   /* Vehicle */
+  #drivertbl th:nth-child(9), #drivertbl td:nth-child(9) { width: 26%; }   /* Address */
+  #drivertbl th:nth-child(10), #drivertbl td:nth-child(10) { width: 46px; }  /* Dist */
+  #drivertbl th:nth-child(11), #drivertbl td:nth-child(11) { width: 44px; }  /* GPS age */
+  #drivertbl td:nth-child(12) { white-space: normal; }
+  #drivertbl th:nth-child(12), #drivertbl td:nth-child(12) { width: 5%; }  /* Flags */
+  #drivertbl th:nth-child(13), #drivertbl td:nth-child(13) { width: 58px; }  /* Report btn */
   #clearedwrap th:nth-child(1), #clearedwrap td:nth-child(1) { width: 7%; }  /* Cleared */
   #clearedwrap th:nth-child(2), #clearedwrap td:nth-child(2) { width: 6%; }  /* Call */
   #clearedwrap th:nth-child(3), #clearedwrap td:nth-child(3) { width: 11%; } /* Member */
@@ -86,13 +86,13 @@
 </style>
 </head>
 <body>
-<h1>FSL Dispatch Tracker <span id="conn" class="conn-bad">connecting</span>
+<h1>FSL Dispatch Tracker <span style="color:#8b909c;font-size:11px">v2.1</span> <span id="conn" class="conn-bad">connecting</span>
   <button id="bellbtn" class="repbtn" style="margin-left:auto" onclick="toggleAlerts()">🔔 Enable alerts</button>
 </h1>
 <div class="meta" id="meta">loading...</div>
 <div class="alerts" id="alerts"></div>
 <div class="tblwrap">
-<table>
+<table id="drivertbl">
 <thead><tr>
   <th>Driver</th><th>Call</th><th>Type</th><th>Status</th><th>Movement</th><th>In status</th>
   <th>ETA (from feed)</th><th>Vehicle</th><th>Address</th><th>Dist (km)</th><th>GPS age</th><th>Flags</th><th></th>
