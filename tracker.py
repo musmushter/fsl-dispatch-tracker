@@ -36,6 +36,8 @@ except Exception:
     print("FATAL: no timezone database. Fix:  pip install tzdata", flush=True)
     raise SystemExit(1)
 
+VERSION = "1.1"
+
 BASE = r"C:/Users/musta/fsl_tracker"
 STATE_FILE = BASE + r"/state.json"
 EVENTS_FILE = BASE + r"/events.jsonl"
@@ -1320,7 +1322,7 @@ async def run():
         await call("Target.setAutoAttach",
                    {"autoAttach": True, "waitForDebuggerOnStart": False,
                     "flatten": True})
-        print("tracker listening...", flush=True)
+        print(f"tracker v{VERSION} listening...", flush=True)
         snap_task = asyncio.create_task(snapshot_loop())
         wd_task = asyncio.create_task(watchdog_loop())
         eta_task = asyncio.create_task(eta_fetch_loop())
@@ -1369,7 +1371,7 @@ if __name__ == "__main__":
 
     def serve():
         with ThreadingTCPServer(("127.0.0.1", 8787), Handler) as httpd:
-            print("dashboard on http://127.0.0.1:8787/dashboard.html", flush=True)
+            print(f"dashboard on http://127.0.0.1:8787/dashboard.html  (v{VERSION})", flush=True)
             httpd.serve_forever()
 
     threading.Thread(target=serve, daemon=True).start()
