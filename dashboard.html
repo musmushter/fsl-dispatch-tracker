@@ -63,6 +63,7 @@
   .st-dispatched { background:#e5484d22; color:#ff7d81; }
   .st-enroute { background:#228b2222; color:#6cd96c; }
   .st-onlocation { background:#3a6ea522; color:#7ab3e8; }
+  .st-onrap { background:#6b4fa022; color:#b39ddb; }
   .st-scheduled { background:#8b909c22; color:#b9bec7; }
   .st-spotted { background:#f5a62322; color:#ffc35c; }
   .stale { color: var(--red); font-weight: 700; }
@@ -141,6 +142,7 @@ function render(s) {
     const st = (r.status||'').toLowerCase().replace(' ','');
     const stCls = st.startsWith('dispatched')?'st-dispatched':st.startsWith('enroute')?'st-enroute':
                   st.startsWith('onlocation')||st.startsWith('tow')||st.startsWith('intow')?'st-onlocation':
+                  st.startsWith('onrap')?'st-onrap':
                   st.startsWith('spotted')?'st-spotted':'st-scheduled';
     const flags = (r.alerts||[]).map(t =>
       '<span class="flag ' + (t==='MEMBER_WAITING'?'y':'r') + '">' +

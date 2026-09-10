@@ -802,12 +802,16 @@ class State:
             svc = self.first_service(rid)
             if not svc:
                 continue
+            status = svc.get("status")
+            if self.busy_on_rap(rid) and status in ("Scheduled", "Dispatched"):
+                # driver is physically working a RAP call; the visible regular
+                # call is just their queued next job
+                status = "On RAP"
             d = self.drivers.get(rid, {})
             pos = d.get("pos") or {}
             dist_m = None
             if pos.get("lat") is not None and svc.get("lat") is not None:
                 dist_m = haversine_m(pos["lat"], pos["lng"], svc["lat"], svc["lng"])
-            status = svc.get("status")
             since = svc.get("status_since") or svc.get("last_modified")
             # ETA from the newest feed comment (own feed or parent WO feed).
             # Stale ('*') = the post predates this service's current driver

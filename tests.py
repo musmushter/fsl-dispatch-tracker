@@ -614,5 +614,19 @@ st21b.ingest_service(mk('Dispatched', 20, '08pT21e', 'D21b', call='555113'))
 check("T21b control: overdue fires without RAP",
       any(a['type'] == 'DISPATCH_OVERDUE' for a in st21b.snapshot()['alerts']))
 
+# T22: driver actively on a RAP call -> visible queued call shows status 'On RAP'
+st22 = m.State()
+st22.ingest_service(mk('On Location', 30, '08pT22r', 'D22', call='555211'))
+st22.services['08pT22r']['call_type'] = 'RAP'
+st22.ingest_service(mk('Dispatched', 20, '08pT22d', 'D22', call='555212'))
+row22 = [r for r in st22.snapshot()['rows'] if r['driver'] == 'D22'][0]
+check("T22 queued call shows On RAP while driver busy", row22['status'] == 'On RAP',
+      f"-> {row22['status']}")
+# control: RAP cleared -> real Dispatched shows again
+st22.services['08pT22r']['status'] = 'Cleared'
+st22.services['08pT22r']['cleared_at'] = m.now_ms()
+check("T22b RAP cleared -> Dispatched restored",
+      [r for r in st22.snapshot()['rows'] if r['driver'] == 'D22'][0]['status'] == 'Dispatched')
+
 print(f"{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)
