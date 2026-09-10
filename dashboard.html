@@ -28,20 +28,22 @@
   /* column widths: percentages so the table always fits the viewport */
   #rows td:nth-child(1), #rows td:nth-child(8), #rows td:nth-child(9) { white-space: normal; }
   #rows td:nth-child(9) { word-break: break-word; }
-  #rows th:nth-child(1), #rows td:nth-child(1) { width: 12%; }   /* Driver */
+  #rows td:nth-child(9) { display: -webkit-box; -webkit-line-clamp: 3;
+                          -webkit-box-orient: vertical; overflow: hidden; }
+  #rows th:nth-child(1), #rows td:nth-child(1) { width: 11%; }   /* Driver */
   #rows th:nth-child(2), #rows td:nth-child(2) { width: 5%; }    /* Call */
   #rows th:nth-child(3), #rows td:nth-child(3) { width: 9%; }   /* Type */
   #rows th:nth-child(4), #rows td:nth-child(4) { width: 8%; }    /* Status */
   #rows th:nth-child(5), #rows td:nth-child(5) { width: 7%; }    /* Movement */
   #rows th:nth-child(6), #rows td:nth-child(6) { width: 5%; }    /* In status */
-  #rows th:nth-child(7), #rows td:nth-child(7) { width: 10%; }   /* ETA */
-  #rows th:nth-child(8), #rows td:nth-child(8) { width: 11%; }   /* Vehicle */
-  #rows th:nth-child(9), #rows td:nth-child(9) { width: 15%; }   /* Address */
+  #rows th:nth-child(7), #rows td:nth-child(7) { width: 9%; }   /* ETA */
+  #rows th:nth-child(8), #rows td:nth-child(8) { width: 12%; }   /* Vehicle */
+  #rows th:nth-child(9), #rows td:nth-child(9) { width: 18%; }   /* Address */
   #rows th:nth-child(10), #rows td:nth-child(10) { width: 3%; }  /* Dist */
   #rows th:nth-child(11), #rows td:nth-child(11) { width: 3%; }  /* GPS age */
   #rows td:nth-child(12) { white-space: normal; }
-  #rows th:nth-child(12), #rows td:nth-child(12) { width: 5%; }  /* Flags */
-  #rows th:nth-child(13), #rows td:nth-child(13) { width: 7%; }  /* Report btn */
+  #rows th:nth-child(12), #rows td:nth-child(12) { width: 4%; }  /* Flags */
+  #rows th:nth-child(13), #rows td:nth-child(13) { width: 6%; }  /* Report btn */
   #clearedwrap th:nth-child(1), #clearedwrap td:nth-child(1) { width: 7%; }  /* Cleared */
   #clearedwrap th:nth-child(2), #clearedwrap td:nth-child(2) { width: 6%; }  /* Call */
   #clearedwrap th:nth-child(3), #clearedwrap td:nth-child(3) { width: 11%; } /* Member */
@@ -162,7 +164,9 @@ function render(s) {
       '<td>' + fmtMin(r.status_min) + '</td>' +
       '<td>' + (r.eta ? r.eta + (r.eta_stale ? ' <span class="stale">*</span>' : '') : '–') + '</td>' +
       '<td>' + (r.vehicle||'') + '</td>' +
-      '<td>' + (r.address||'') + (r.dropoff ? '<br><span style="color:#8b909c">↓ ' + r.dropoff + '</span>' : '') + '</td>' +
+      '<td title="' + (r.dropoff ? (r.address||'') + ' → ' + r.dropoff : (r.address||'')) + '">' +
+        (r.address||'') +
+        (r.dropoff ? '<br><span style="color:#8b909c">↓ ' + r.dropoff + '</span>' : '') + '</td>' +
       '<td>' + (r.dist_km==null?'–':r.dist_km) + '</td>' +
       '<td>' + gpsAge + '</td>' +
       '<td>' + flags + '</td>' +
