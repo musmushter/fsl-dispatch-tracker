@@ -80,6 +80,12 @@ NOTES / LIMITS
   Salesforce. Volume impact on the org: zero extra requests.
 
 SETUP ON A NEW MACHINE (colleague install)
+ONE CLICK:  double-click  SETUP.bat
+  (installs Python 3.11 + Chrome if missing, pip packages, Start Menu
+  shortcuts, then opens the console for first login — just log in with
+  your own AAA credentials and you're done)
+
+Manual steps, if you prefer:
 1. Install Python 3.11+ (python.org, tick "Add to PATH") and Google Chrome.
 2. Get this folder (git clone), then:
       pip install websockets
