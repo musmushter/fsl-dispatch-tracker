@@ -63,7 +63,7 @@
 <table>
 <thead><tr>
   <th>Driver</th><th>Call</th><th>Type</th><th>Status</th><th>Movement</th><th>In status</th>
-  <th>ETA (from feed)</th><th>Vehicle</th><th>Address</th><th>Drop-off</th><th>Dist (km)</th><th>GPS age</th><th>Flags</th><th></th>
+  <th>ETA (from feed)</th><th>Vehicle</th><th>Address</th><th>Dist (km)</th><th>GPS age</th><th>Flags</th><th></th>
 </tr></thead>
 <tbody id="rows"></tbody>
 </table>
@@ -128,8 +128,7 @@ function render(s) {
       '<td>' + fmtMin(r.status_min) + '</td>' +
       '<td>' + (r.eta ? r.eta + (r.eta_stale ? ' <span class="stale">*</span>' : '') : '–') + '</td>' +
       '<td>' + (r.vehicle||'') + '</td>' +
-      '<td>' + (r.address||'') + '</td>' +
-      '<td>' + (r.dropoff||'–') + '</td>' +
+      '<td>' + (r.address||'') + (r.dropoff ? '<br><span style="color:#8b909c">↓ ' + r.dropoff + '</span>' : '') + '</td>' +
       '<td>' + (r.dist_km==null?'–':r.dist_km) + '</td>' +
       '<td>' + gpsAge + '</td>' +
       '<td>' + flags + '</td>' +

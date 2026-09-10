@@ -509,6 +509,32 @@ check("T16b regular driver with odd name format still visible",
       any('Rojae' in (r['driver'] or '') for r in snap17b['rows']))
 
 print()
+# T17: reverse-linked pair (only the SECOND leg carries 'related') — dropoff and
+# AT DROP OFF must still resolve via the reverse lookup
+st12 = m.State()
+now12 = m.now_ms()
+head = {'Id': '08pT17A', 'D3_Call_ID__c': '9801', 'Status': 'En Route',
+        'WO_Call_Type__c': 'TOW', 'Latitude': 29.761, 'Longitude': -95.272,
+        'Street': '619 W 27th St',
+        'SchedStartTime': m.sf_ms_to_epoch(now12 - 90*60000),
+        'LastModifiedDate': now12 - 70*60000}
+st12.ingest_service({'Resource': '0HP17', 'ResourceName': 'Rev Tester',
+                     'Fields': {'s': 1, 'v': head}})
+st12.services['08pT17A']['status_since'] = now12 - 70*60000
+# second leg: only THIS one has related -> head (reverse link only)
+second = {'Id': '08pT17B', 'D3_Call_ID__c': '9801', 'Status': 'Dispatched',
+          'WO_Call_Type__c': 'TOW', 'Latitude': 29.72, 'Longitude': -95.30,
+          'Street': '55 dealer rd', 'City': 'Houston',
+          'Related_Service__c': '08pT17A',
+          'SchedStartTime': m.sf_ms_to_epoch(now12 - 60*60000),
+          'LastModifiedDate': now12 - 60*60000}
+st12.ingest_service({'Resource': '0HP17', 'ResourceName': 'Rev Tester',
+                     'Fields': {'s': 1, 'v': second}})
+st12.services['08pT17B']['reltype'] = 'Immediately Follow'
+snap17 = st12.snapshot()
+row17 = [r for r in snap17['rows'] if r['call_id'] == '9801'][0]
+check("T17a reverse-linked pair: dropoff shown", row17['dropoff'] == '55 dealer rd, Houston')
+print()
 print()
 print(f"{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)

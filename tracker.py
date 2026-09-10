@@ -251,6 +251,8 @@ class State:
         self.wo_fetch = {}      # parent_id -> last attempt ts
         self.feed_times = {}    # sa_id -> {status: epoch_ms} from SA feed
         self.feed_time_fetch = {}  # sa_id -> last attempt ts
+        self.dropoff_cache = {}     # sa_id -> "street, city" from lightbox
+        self.dropoff_fetch = {}     # sa_id -> last attempt ts
         self.last_movement = {} # resource_id -> "MOVING" | "STANDSTILL" | None
 
     def log_event(self, kind, **kw):
@@ -370,6 +372,8 @@ class State:
                 rec["cleared_at"] = (now_ms() if prev_status is not None
                                      else (f.get("LastModifiedDate") or now_ms()))
             self.log_event("status", appt=rec["appt"], call_id=rec["call_id"],
+                           sa_id=rec["sa_id"], related=rec.get("related"),
+                           reltype=rec.get("reltype"),
                            driver=rec["resource_name"] if "resource_name" in rec else rec["resource_id"],
                            status=status)
         if rec["resource_id"] and rec.get("resource_name"):
@@ -577,8 +581,7 @@ class State:
                     # drop-off = car already towed, status not flipped.
                     at_dropoff = False
                     dropoff_m = None
-                    mate = (self.services.get(svc.get("related"))
-                            if svc.get("related") else None)
+                    mate = self._mate_of(svc)
                     if (mate and mate.get("lat") is not None
                             and pos.get("lat") is not None):
                         dropoff_m = haversine_m(pos["lat"], pos["lng"],
@@ -747,17 +750,32 @@ class State:
                      reverse=True)
         return out
 
+    def _mate_of(self, svc):
+        """The other leg of a tow pair: forward link (svc.related) or reverse
+        (any service whose related == svc.sa_id)."""
+        rel = svc.get("related")
+        if rel and svc.get("reltype") == "Immediately Follow":
+            mate = self.services.get(rel)
+            if mate:
+                return mate
+        # reverse link: the OTHER leg points at us ('Related_Service__c' on the
+        # second leg); many payloads only carry the link one way
+        for s in self.services.values():
+            if (s.get("related") == svc["sa_id"]
+                    and s.get("reltype") == "Immediately Follow"):
+                return s
+        return None
+
     def _dropoff_of(self, svc):
         """Tow pair drop-off address = the mate leg's street/city. Only pairs
         ('Immediately Follow') have one; None otherwise."""
-        rel = svc.get("related")
-        if not rel or svc.get("reltype") != "Immediately Follow":
-            return None
-        mate = self.services.get(rel)
+        mate = self._mate_of(svc)
         if not mate:
             return None
         parts = [p for p in (mate.get("street"), mate.get("city")) if p]
-        return ", ".join(parts) if parts else None
+        if parts:
+            return ", ".join(parts)
+        return self.dropoff_cache.get(mate.get("sa_id"))
 
     def snapshot(self):
         now = now_ms()
@@ -823,8 +841,7 @@ class State:
                         move_since = recent[0]["t"]
                         # paired tow: near the mate leg's location = at the
                         # drop-off point (car already towed, forgot to flip)
-                        mate = (self.services.get(svc.get("related"))
-                                if svc.get("related") else None)
+                        mate = self._mate_of(svc)
                         dropoff_near = False
                         if (mate and mate.get("lat") is not None
                                 and pos.get("lat") is not None):
@@ -1159,6 +1176,17 @@ async def run():
                           flush=True)
                     await asyncio.sleep(30)
 
+        def parse_lightbox_address(body):
+            """vf002 lightbox -> 'Street, City' (Address block)."""
+            txt = re.sub(r"<script.*?</script>", " ", body, flags=re.S)
+            txt = " | ".join(re.findall(r">([^<>]+)<", txt))
+            txt = " ".join(txt.replace("&nbsp;", " ").split())
+            m = re.search(r"Address\s*\|+\s*Landmark\s*\|+\s*City\s*\|+\s*([^|]+?)\s*\|+\s*Street\s*\|+\s*([^|]+?)\s*\|", txt)
+            if m:
+                return m.group(2).strip() + ", " + m.group(1).strip()
+            m = re.search(r"Street\s*\|+\s*([^|]+?)\s*\|", txt)
+            return m.group(1).strip() if m else None
+
         async def wo_enrich_loop():
             """Fetch WO lightboxes (member name / benefit / work type) for
             recently cleared services that lack them. 1 fetch / 22 s max,
@@ -1201,6 +1229,48 @@ async def run():
                         await asyncio.sleep(1)
                 except Exception:
                     print("wo enrich error:", traceback.format_exc()[:200],
+                          flush=True)
+                    await asyncio.sleep(30)
+
+        async def dropoff_loop():
+            """For followed tow-pair rows whose mate leg has no address in the
+            gantt data: fetch the mate's lightbox (same read-only session) and
+            cache 'street, city'. One fetch per cycle."""
+            while True:
+                await asyncio.sleep(22)
+                try:
+                    if (now_ms() - state.last_data_ts) / 1000 > 600:
+                        continue
+                    now = now_ms()
+                    job = None
+                    for rid in {s["resource_id"] for s in state.services.values()
+                                if not state.cleared(s) and s.get("resource_id")}:
+                        svc = state.first_service(rid)
+                        if not svc:
+                            continue
+                        mate = state._mate_of(svc)
+                        if not mate:
+                            continue
+                        mid = mate.get("sa_id")
+                        if (mate.get("street")
+                                or mid in state.dropoff_cache):
+                            continue
+                        if now - state.dropoff_fetch.get(mid, 0) < 600000:
+                            continue
+                        job = mid
+                        break
+                    if not job:
+                        continue
+                    state.dropoff_fetch[job] = now
+                    body = await fetch_feed_via_page(
+                        "/ACEContractorCommunity/apex/"
+                        "fsl__vf002_serviceexpertlightboxform?id=" + job)
+                    addr = parse_lightbox_address(body) if body else None
+                    if addr:
+                        state.dropoff_cache[job] = addr
+                        state.log_event("dropoff", sa_id=job, address=addr)
+                except Exception:
+                    print("dropoff error:", traceback.format_exc()[:200],
                           flush=True)
                     await asyncio.sleep(30)
 
@@ -1341,8 +1411,9 @@ async def run():
         eta_task = asyncio.create_task(eta_fetch_loop())
         wo_task = asyncio.create_task(wo_enrich_loop())
         ft_task = asyncio.create_task(feed_time_loop())
+        do_task = asyncio.create_task(dropoff_loop())
         await asyncio.gather(reader_task, snap_task, wd_task, eta_task, wo_task,
-                             ft_task)
+                             ft_task, do_task)
 
 
 if __name__ == "__main__":
