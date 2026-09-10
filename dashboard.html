@@ -62,7 +62,7 @@
   .st { padding: 1px 8px; border-radius: 9px; font-size: 11px; font-weight: 600; }
   .st-dispatched { background:#e5484d22; color:#ff7d81; }
   .st-enroute { background:#228b2222; color:#6cd96c; }
-  .st-onlocation, .st-tow { background:#3a6ea522; color:#7ab3e8; }
+  .st-onlocation { background:#3a6ea522; color:#7ab3e8; }
   .st-scheduled { background:#8b909c22; color:#b9bec7; }
   .st-spotted { background:#f5a62322; color:#ffc35c; }
   .stale { color: var(--red); font-weight: 700; }
@@ -174,7 +174,7 @@ function render(s) {
                     s:r.status||'', m:Math.round(r.status_min||0),
                     e:r.eta||'', lo:r.eta_low, hi:r.eta_high,
                     mv:r.moving||'', mm:r.moving_min, km:r.dist_km,
-                    g:r.gps_age_min, cs:r.chain_second||false};
+                    cs:r.chain_second||false};
     rbtn.addEventListener('click', function() { copyReport(this, this.rowData); });
     tb.appendChild(tr);
   });

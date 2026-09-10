@@ -15,7 +15,6 @@ import datetime as dt
 from zoneinfo import ZoneInfo
 import json
 import math
-import os
 import re
 import subprocess
 import time
@@ -41,7 +40,6 @@ VERSION = "1.1"
 BASE = r"C:/Users/musta/fsl_tracker"
 STATE_FILE = BASE + r"/state.json"
 EVENTS_FILE = BASE + r"/events.jsonl"
-ALERT_SOUND_PS = BASE + r"/toast.ps1"
 
 # ---------------- alert configuration ----------------
 DISPATCH_OVERDUE_MIN = 10      # Dispatched > 10 min without En Route
@@ -80,14 +78,14 @@ def ms_to_central(ms):
 # LastKnownLocationDate as the datetime's US-Central WALL CLOCK printed as if
 # it were UTC (validated 2026-09-04 against console ground truth).
 # LastModifiedDate and delta updateTime are true epoch — do NOT shift those.
-CENTRAL_UTC_OFFSET_MS = -int(dt.datetime.now(ZONE).utcoffset().total_seconds()) * 1000
-
-
 def sf_ms_to_epoch(ms):
-    """Convert a wall-as-UTC Salesforce ms value to true epoch ms."""
+    """Convert a wall-as-UTC Salesforce ms value to true epoch ms. The Central
+    offset is computed per call so a tracker left running across a DST change
+    keeps converting wall-clock values correctly."""
     if not ms:
         return None
-    return ms + CENTRAL_UTC_OFFSET_MS
+    off = -int(dt.datetime.now(ZONE).utcoffset().total_seconds()) * 1000
+    return ms + off
 
 
 ETA_RANGE_RE = re.compile(r"ETA\s*(?:is|@|:|-)?\s*(\d{1,3})\s*[-–]\s*(\d{1,3})\s*M", re.I)
@@ -104,11 +102,22 @@ FEED_TIME_RE = re.compile(r"(Today|Yesterday) at (\d{1,2}):(\d{2})\s*([AP]M)", r
 SA_CHANGE_RE = re.compile(r"changed\s+Status\s+from\s+([^.<|]+?)\s+to\s+([^.<|]+?)\s*\.", re.I)
 
 
+def feed_post_epoch(tm):
+    """FEED_TIME_RE match ('Today|Yesterday at H:MM AM/PM') -> true epoch ms
+    (the feed prints Central wall clock)."""
+    hh = int(tm.group(2)) % 12 + (12 if tm.group(4).upper() == "PM" else 0)
+    wall = dt.datetime.now(ZONE).replace(hour=hh, minute=int(tm.group(3)),
+                                         second=0, microsecond=0)
+    if tm.group(1).lower() == "yesterday":
+        wall -= dt.timedelta(days=1)
+    return int(wall.timestamp() * 1000)
+
+
 def parse_status_times_from_feed(body):
     """SA chatter feed -> ({status: epoch_ms}, reassigned:int). Times are the
     newest 'changed Status ... to X' post per status. `reassigned` counts
-    Dispatched/En Route posts: >1 means the call changed hands (the member's
-    wait restarts at the latest dispatch)."""
+    Dispatched/En Route posts (>1 = the call changed hands); audit-log
+    information only."""
     clean = re.sub(r"<script.*?</script>", " ", body, flags=re.S)
     clean = re.sub(r"<[^>]+>", " ", clean)
     clean = clean.replace("&nbsp;", " ")
@@ -119,12 +128,7 @@ def parse_status_times_from_feed(body):
         tm = FEED_TIME_RE.search(clean, m.end(), m.end() + 400)
         if not tm:
             continue
-        hh = int(tm.group(2)) % 12 + (12 if tm.group(4).upper() == "PM" else 0)
-        wall = dt.datetime.now(ZONE).replace(hour=hh, minute=int(tm.group(3)),
-                                             second=0, microsecond=0)
-        if tm.group(1).lower() == "yesterday":
-            wall -= dt.timedelta(days=1)
-        posted = int(wall.timestamp() * 1000)
+        posted = feed_post_epoch(tm)
         # keep the newest post per status
         if status not in out or posted > out[status]:
             out[status] = posted
@@ -157,12 +161,7 @@ def parse_eta_from_feed(body, ref_epoch_ms):
         tm = FEED_TIME_RE.search(body, m.end(), m.end() + 4000)
         if not tm:
             continue
-        hh = int(tm.group(2)) % 12 + (12 if tm.group(4).upper() == "PM" else 0)
-        wall = dt.datetime.now(ZONE).replace(hour=hh, minute=int(tm.group(3)),
-                                             second=0, microsecond=0)
-        if tm.group(1).lower() == "yesterday":
-            wall -= dt.timedelta(days=1)
-        posted = int(wall.timestamp() * 1000)
+        posted = feed_post_epoch(tm)
         cand = {"low": posted + lo * 60000, "high": posted + hi * 60000,
                 "posted": posted, "text": em.group(0).strip()}
         if best is None or cand["posted"] > best["posted"]:
@@ -246,7 +245,6 @@ class State:
         self.last_full_ts = 0   # last full-day load (bulk ingest)
         self.last_reload_ts = 0 # last time watchdog reloaded the console tab
         self.login_required = False
-        self.console_seen_services = set()
         self.etas = {}          # parent_or_sa_id -> {"low","high","posted","text"}
         self.eta_fetch = {}     # sa_id -> last autofetch attempt ts
         # enrichment via the WO lightbox (Contact/member name); the gantt and
@@ -257,7 +255,6 @@ class State:
         self.feed_time_fetch = {}  # sa_id -> last attempt ts
         self.dropoff_cache = {}     # sa_id -> "street, city" from lightbox
         self.dropoff_fetch = {}     # sa_id -> last attempt ts
-        self.reassigned = set()     # sa_ids whose feed shows >1 dispatch/enroute
         self.last_movement = {} # resource_id -> "MOVING" | "STANDSTILL" | None
 
     def log_event(self, kind, **kw):
@@ -335,7 +332,6 @@ class State:
             "lat": f.get("Latitude"),
             "lng": f.get("Longitude"),
             "call_type": f.get("WO_Call_Type__c"),
-            "work_type": coerce_text(f.get("WorkType")),
             "work_type_id": coerce_text(f.get("WorkTypeId")),
             "subject": f.get("Subject"),
             "phone": f.get("Phone_Number__c"),
@@ -420,8 +416,7 @@ class State:
         return bool(EXTERNAL_NAME_RE.match(rec.get("resource_name") or ""))
 
     def cleared(self, rec):
-        if (rec.get("status") in ("Cleared", "Canceled", "Complete",
-                                  "Tow Complete")
+        if (rec.get("status") in DONE_STATUSES or rec.get("status") == "Canceled"
                 or rec.get("status_category") in ("Completed",)
                 or rec.get("IsDeleted")):
             return True
@@ -638,25 +633,6 @@ class State:
                                        "level": "urgent", "since": eta["high"]}
         return active
 
-    def wait_min(self, rec):
-        """Minutes the member waited: sched start -> arrival. If the driver
-        arrived before sched (early), that's still a wait relative to sched;
-        fall back to spotted time if no sched time is known."""
-        if not rec.get("arrived_at"):
-            return None
-        ref = rec.get("sched_start") or rec.get("spotted_at")
-        if not ref:
-            return None
-        return max(0.0, (rec["arrived_at"] - ref) / 60000)
-
-    def _arrival_from_history(self, rec):
-        """Best-effort arrival time for services that were seeded by a bulk
-        load already in progress: scan the recorded status history."""
-        for h in rec.get("status_history", []):
-            if h.get("status") in ARRIVED_STATUSES:
-                return h.get("t")
-        return None
-
     def cleared_log(self):
         """Callback list (all completed services in the last 12 h; the
         dashboard shows 20 and pages via load-more). Excludes RAP and
@@ -684,17 +660,11 @@ class State:
             if s["sa_id"] in seen:
                 continue
             seen.add(s["sa_id"])
-            arrived = (s.get("arrived_at") or s.get("actual_start")
-                       or self._arrival_from_history(s))
-            wait = None
-            if arrived and s.get("sched_start"):
-                wait = round(max(0.0, (arrived - s["sched_start"]) / 60000))
             wo = self.wo_cache.get(s.get("parent_id")) or {}
             # exact status times from the SA feed (ground truth, works even
-            # for services cleared before the tracker watched)
-            feed_times = self.feed_times.get(s["sa_id"]) or {}
-            # merge feed times across the pair (tow legs split the journey:
-            # drive leg holds Spotted/Scheduled/On Location, tow leg holds
+            # for services cleared before the tracker watched); merge across
+            # the pair (tow legs split the journey: drive leg holds
+            # Spotted/Scheduled/On Location, tow leg holds
             # In Tow/Tow Complete/Cleared)
             merged = {}
             leg_ids = [s["sa_id"]]
@@ -714,12 +684,11 @@ class State:
             cleared_t = (merged.get("Cleared") or merged.get("Tow Complete")
                          or s.get("cleared_at"))
             # member wait (user's definition): earliest Spotted/Scheduled/
-            # Dispatched -> On Location/Tow Loaded. Exact sources only:
-            # SA feed ground truth or a flip the tracker watched live.
+            # Dispatched -> On Location/Tow Loaded (true wait regardless of
+            # reassignments). Exact sources only: SA feed ground truth or a
+            # flip the tracker watched live.
             starts = [merged[k] for k in ("Spotted", "Scheduled", "Dispatched")
                       if merged.get(k)]
-            # member wait = earliest Scheduled/Spotted/Dispatched -> arrival
-            # (the true wait regardless of driver reassignments)
             if arrived and starts:
                 wait = round(max(0.0, (arrived - min(starts)) / 60000))
             elif arrived and s.get("arrived_live") and s.get("sched_start"):
@@ -894,22 +863,17 @@ class State:
                 "status": status,
                 "chain_second": bool(svc.get("chain_second")),
                 "moving": move_state,
-                "moving_since": ms_to_central(move_since) if move_since else None,
                 "moving_min": round((now - move_since) / 60000) if move_since else None,
                 "vehicle": svc.get("vehicle"),
-                "sched_start": ms_to_central(svc.get("sched_start")),
                 "eta": eta_str,
                 "eta_stale": eta_stale,
                 "eta_low": eta["low"] if eta else None,
                 "eta_high": eta["high"] if eta else None,
-                "eta_posted": ms_to_central(eta["posted"]) if eta else None,
                 "status_min": round((now - since) / 60000, 1) if since else None,
                 "address": svc.get("street"),
                 "dropoff": self._dropoff_of(svc),
                 "dist_km": round(dist_m / 1000, 1) if dist_m is not None else None,
                 "gps_age_min": round((now - pos.get("t", 0)) / 60000, 1) if pos.get("t") else None,
-                "gps": [round(pos.get("lat", 0), 5), round(pos.get("lng", 0), 5)] if pos else None,
-                "color": svc.get("gantt_color"),
                 "alerts": [a["type"] for k, a in alerts.items() if a["driver_id"] == rid],
             })
         rows.sort(key=lambda r: str(r["driver"] or ""))
@@ -1027,8 +991,6 @@ async def run():
                         return
                     if isinstance(res, dict) and "updatedLivePositions" in res:
                         state.ingest_delta(res)
-                    elif "Gantt" in action or "ResourceCalendar" in action or "resource" in url.lower():
-                        state.ingest_bulk(res)
                     else:
                         state.ingest_bulk(res)
             except Exception:
@@ -1341,8 +1303,6 @@ async def run():
                             times, reassigned = parse_status_times_from_feed(body)
                             if times:
                                 state.feed_times[job["sa_id"]] = times
-                                if reassigned > 1:
-                                    state.reassigned.add(job["sa_id"])
                                 state.log_event("feed_times",
                                                 sa_id=job["sa_id"],
                                                 call_id=job.get("call_id"),

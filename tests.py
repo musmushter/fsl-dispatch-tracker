@@ -547,7 +547,7 @@ t_onloc = now13 - 67*60000
 t_cleared = now13 - 52*60000
 st13.feed_times['08pT18'] = {"Scheduled": t_sched, "Dispatched": t_d2,
                              "On Location": t_onloc, "Cleared": t_cleared}
-st13.reassigned.add('08pT18')   # parser counted 2 Dispatched/En Route posts
+# (reassigned detection kept in the feed parse for the audit log only)
 svc18 = {'Id': '08pT18', 'D3_Call_ID__c': '9901', 'Status': 'Cleared',
          'WO_Call_Type__c': 'TOW', 'Street': '1 test st',
          'SchedStartTime': m.sf_ms_to_epoch(t_sched),
