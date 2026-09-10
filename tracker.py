@@ -747,6 +747,18 @@ class State:
                      reverse=True)
         return out
 
+    def _dropoff_of(self, svc):
+        """Tow pair drop-off address = the mate leg's street/city. Only pairs
+        ('Immediately Follow') have one; None otherwise."""
+        rel = svc.get("related")
+        if not rel or svc.get("reltype") != "Immediately Follow":
+            return None
+        mate = self.services.get(rel)
+        if not mate:
+            return None
+        parts = [p for p in (mate.get("street"), mate.get("city")) if p]
+        return ", ".join(parts) if parts else None
+
     def snapshot(self):
         now = now_ms()
         alerts = self.compute_alerts()
@@ -852,6 +864,7 @@ class State:
                 "eta_posted": ms_to_central(eta["posted"]) if eta else None,
                 "status_min": round((now - since) / 60000, 1) if since else None,
                 "address": svc.get("street"),
+                "dropoff": self._dropoff_of(svc),
                 "dist_km": round(dist_m / 1000, 1) if dist_m is not None else None,
                 "gps_age_min": round((now - pos.get("t", 0)) / 60000, 1) if pos.get("t") else None,
                 "gps": [round(pos.get("lat", 0), 5), round(pos.get("lng", 0), 5)] if pos else None,
