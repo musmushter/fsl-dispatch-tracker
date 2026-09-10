@@ -506,6 +506,18 @@ class State:
             svc.pop("chain_second", None)
         return svc
 
+    def busy_on_rap(self, rid):
+        """True if the driver currently has a RAP service in an active-work
+        state (Dispatched/En Route/On Location...). A driver on a RAP call
+        can't respond to their dispatched regular call — suppress the
+        dispatch-overdue alert for it (the dispatch is for their NEXT job)."""
+        for s in self.services.values():
+            if (s.get("resource_id") == rid
+                    and (s.get("call_type") or "").upper() == "RAP"
+                    and not self.cleared(s) and not self.future_day(s)):
+                return True
+        return False
+
     def driver_name(self, rid):
         d = self.drivers.get(rid)
         if d and d.get("name"):
@@ -554,7 +566,7 @@ class State:
                 since = svc.get("status_since") or svc.get("last_modified") or now
                 mins = (now - since) / 60000
                 base["dispatch_min"] = round(mins, 1)
-                if mins >= DISPATCH_OVERDUE_MIN:
+                if mins >= DISPATCH_OVERDUE_MIN and not self.busy_on_rap(rid):
                     key = f"dispatch:{svc['sa_id']}"
                     active[key] = {**base, "type": "DISPATCH_OVERDUE",
                                    "detail": f"Dispatched {mins:.0f} min without En Route",

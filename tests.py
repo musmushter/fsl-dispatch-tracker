@@ -596,6 +596,23 @@ row20 = [r for r in st15.snapshot()['rows'] if r['call_id'] == '9950'][0]
 check("T20 followed=destination leg: no duplicate dropoff", row20['dropoff'] is None)
 
 print()
+
 print()
+# T21: driver busy on a RAP call (On Location) + regular call Dispatched 20 min
+# ago -> NO dispatch-overdue alert (they're legitimately on the RAP)
+st21 = m.State()
+st21.ingest_service(mk('On Location', 30, '08pT21r', 'D21', call='555111'))
+st21.services['08pT21r']['call_type'] = 'RAP'
+st21.ingest_service(mk('Dispatched', 20, '08pT21d', 'D21', call='555112'))
+snap21 = st21.snapshot()
+types21 = [a['type'] for a in snap21['alerts']]
+check("T21 dispatched regular call suppressed while on RAP",
+      not any(t == 'DISPATCH_OVERDUE' for t in types21), f"-> {types21}")
+# control: without the RAP, the overdue alert fires
+st21b = m.State()
+st21b.ingest_service(mk('Dispatched', 20, '08pT21e', 'D21b', call='555113'))
+check("T21b control: overdue fires without RAP",
+      any(a['type'] == 'DISPATCH_OVERDUE' for a in st21b.snapshot()['alerts']))
+
 print(f"{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)
