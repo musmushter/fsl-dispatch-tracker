@@ -718,13 +718,10 @@ class State:
             # SA feed ground truth or a flip the tracker watched live.
             starts = [merged[k] for k in ("Spotted", "Scheduled", "Dispatched")
                       if merged.get(k)]
-            # reassigned calls carry MULTIPLE Dispatched posts (one per driver);
-            # the member's wait began with the LATEST dispatch, not the first
+            # member wait = earliest Scheduled/Spotted/Dispatched -> arrival
+            # (the true wait regardless of driver reassignments)
             if arrived and starts:
-                if s["sa_id"] in self.reassigned:
-                    wait = round(max(0.0, (arrived - max(starts)) / 60000))
-                else:
-                    wait = round(max(0.0, (arrived - min(starts)) / 60000))
+                wait = round(max(0.0, (arrived - min(starts)) / 60000))
             elif arrived and s.get("arrived_live") and s.get("sched_start"):
                 wait = round(max(0.0, (arrived - s["sched_start"]) / 60000))
             else:
@@ -786,11 +783,19 @@ class State:
         return cands[0] if len(cands) == 1 else None
 
     def _dropoff_of(self, svc):
-        """Tow pair drop-off address = the mate leg's street/city. Only pairs
-        ('Immediately Follow') have one; None otherwise."""
+        """Tow pair drop-off = the DESTINATION leg's address (the later leg of
+        the pair — where the car is being towed). Only shown when the followed
+        service is the EARLIER leg (drive to member); if the followed service
+        is itself the destination leg, the drop-off is already the Address
+        column, so None (keeps the display stable across leg flips)."""
         mate = self._mate_of(svc)
         if not mate:
             return None
+        # the destination leg = the LATER-scheduled leg of the pair
+        my_key = (svc.get("sched_start") or 0, svc.get("appt") or "")
+        mate_key = (mate.get("sched_start") or 0, mate.get("appt") or "")
+        if my_key >= mate_key:
+            return None  # this leg IS the destination
         parts = [p for p in (mate.get("street"), mate.get("city")) if p]
         if parts:
             return ", ".join(parts)

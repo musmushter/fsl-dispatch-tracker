@@ -535,8 +535,8 @@ snap17 = st12.snapshot()
 row17 = [r for r in snap17['rows'] if r['call_id'] == '9801'][0]
 check("T17a reverse-linked pair: dropoff shown", row17['dropoff'] == '55 dealer rd, Houston')
 print()
-# T18: reassigned call — feed has TWO Dispatched posts (two drivers); the wait
-# starts from the LATEST dispatch, not the earliest
+# T18: reassigned call — feed has TWO Dispatched posts (two drivers); the member
+# wait still measures from the EARLIEST Scheduled (true member wait)
 st13 = m.State()
 now13 = m.now_ms()
 # feed: Scheduled t0, Dispatched twice (first driver 4:40, second 5:10), OnLoc 5:23
@@ -558,7 +558,7 @@ st13.services['08pT18']['cleared_at'] = t_cleared
 clog18 = st13.cleared_log()
 row18 = [c for c in clog18 if c['call_id'] == '9901'][0]
 # waited = OnLoc(67min ago) - latest Dispatch(80min ago) = 13 min (not 110-67=43)
-check("T18 reassigned: wait from LATEST dispatch (13 min)", row18['wait_min'] == 13)
+check("T18 reassigned: wait from earliest Scheduled (53 min)", row18['wait_min'] == 53)
 # control: single-dispatch call still uses earliest (Scheduled)
 st14 = m.State()
 st14.feed_times['08pT19'] = {"Scheduled": t_sched, "Dispatched": t_d1,
@@ -570,6 +570,30 @@ clog19 = st14.cleared_log()
 row19 = [c for c in clog19 if c['call_id'] == '9902'][0]
 # normal: waited = OnLoc - Scheduled = 120-67 = 53
 check("T19 normal call: wait from Scheduled (53 min)", row19['wait_min'] == 53)
+
+print()
+# T20: followed = destination (later) leg -> dropoff not shown (redundant; the
+# Address column IS the drop-off) and display stays stable across leg flips
+st15 = m.State()
+now15 = m.now_ms()
+head20 = {'Id': '08pT20A', 'D3_Call_ID__c': '9950', 'Status': 'Cleared',
+          'WO_Call_Type__c': 'TOW', 'Street': '619 W 27th St',
+          'SchedStartTime': m.sf_ms_to_epoch(now15 - 90*60000),
+          'LastModifiedDate': now15 - 70*60000}
+st15.ingest_service({'Resource': '0HP20', 'ResourceName': 'Dest Tester',
+                     'Fields': {'s': 1, 'v': head20}})
+st15.services['08pT20A']['related'] = '08pT20B'
+st15.services['08pT20A']['reltype'] = 'Immediately Follow'
+dest = {'Id': '08pT20B', 'D3_Call_ID__c': '9950', 'Status': 'Tow Loaded',
+        'WO_Call_Type__c': 'TOW', 'Street': '55 dealer rd', 'City': 'Houston',
+        'SchedStartTime': m.sf_ms_to_epoch(now15 - 60*60000),
+        'LastModifiedDate': now15 - 60*60000}
+st15.ingest_service({'Resource': '0HP20', 'ResourceName': 'Dest Tester',
+                     'Fields': {'s': 1, 'v': dest}})
+st15.services['08pT20B']['related'] = '08pT20A'
+st15.services['08pT20B']['reltype'] = 'Immediately Follow'
+row20 = [r for r in st15.snapshot()['rows'] if r['call_id'] == '9950'][0]
+check("T20 followed=destination leg: no duplicate dropoff", row20['dropoff'] is None)
 
 print()
 print()
