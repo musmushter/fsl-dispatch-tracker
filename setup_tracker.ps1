@@ -15,6 +15,10 @@ $ErrorActionPreference = "Stop"
 $dir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $dir
 
+# PowerShell 5.1 defaults to TLS 1.0 for downloads; python.org / dl.google.com
+# need TLS 1.2 or the installer download throws and (with Stop) kills the script
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
 function Say($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
 
 # ---------- 0. am I on Windows? ----------
@@ -36,28 +40,39 @@ if (-not $pyOK) {
     $installed = $false
     $winget = Get-Command winget -ErrorAction SilentlyContinue
     if ($winget) {
-        & winget install --id Python.Python.3.11 --silent --accept-package-agreements --accept-source-agreements
-        if ($LASTEXITCODE -eq 0) { $installed = $true }
-    } else {
-        Write-Host "  winget not available - downloading installer directly..."
-        $inst = "$env:TEMP\python311-install.exe"
-        Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe" -OutFile $inst -UseBasicParsing
-        # machine-wide, adds to PATH, no UI
-        Start-Process -FilePath $inst -ArgumentList "/quiet InstallAllUsers=0 PrependPath=1" -Wait
-        $installed = $true
+        try {
+            & winget install --id Python.Python.3.11 --silent --accept-package-agreements --accept-source-agreements
+            if ($LASTEXITCODE -eq 0) { $installed = $true }
+        } catch { Write-Host "  winget install failed: $_" -ForegroundColor Yellow }
+    }
+    if (-not $installed) {
+        if (-not $winget) { Write-Host "  winget not available - downloading installer directly..." }
+        try {
+            $inst = "$env:TEMP\python311-install.exe"
+            Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe" -OutFile $inst -UseBasicParsing
+            # per-user install, adds to PATH, no UI
+            Start-Process -FilePath $inst -ArgumentList "/quiet InstallAllUsers=0 PrependPath=1" -Wait
+            $installed = $true
+        } catch { Write-Host "  direct install failed: $_" -ForegroundColor Yellow }
     }
     if (-not $installed) { Write-Host "Python install FAILED - install manually from python.org then re-run." -ForegroundColor Red; pause; exit 1 }
-    # refresh PATH for this session
+    # refresh PATH for this session (per-user installs land in %LOCALAPPDATA%)
     $env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")
     Write-Host "  Python installed."
 }
-# find a usable python (py launcher preferred on Windows)
+# find a usable python (py launcher preferred on Windows); also probe the default
+# per-user install dir directly — PATH refresh doesn't reach already-open shells
 $pythonExe = $null
 foreach ($c in @("py -3", "python", "python3")) {
     try {
         $v = Invoke-Expression "$c --version" 2>$null
         if ($v -match "^Python 3") { $pythonExe = $c; break }
     } catch {}
+}
+if (-not $pythonExe) {
+    $cand = Get-ChildItem "$env:LOCALAPPDATA\Programs\Python" -Filter "python.exe" -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match "Python31" } | Select-Object -First 1
+    if ($cand) { $pythonExe = "`"$($cand.FullName)`"" }
 }
 if (-not $pythonExe) { Write-Host "No Python 3 found even after install - reboot once and re-run this script." -ForegroundColor Red; pause; exit 1 }
 Write-Host "  using: $pythonExe"

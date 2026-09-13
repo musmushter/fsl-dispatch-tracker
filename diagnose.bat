@@ -9,6 +9,7 @@ echo [1] Python check:
 set PYEXE=
 py -3 --version 2>nul && set PYEXE=py -3
 if not defined PYEXE python --version 2>nul && set PYEXE=python
+if not defined PYEXE for /d %%D in ("%LOCALAPPDATA%\Programs\Python\Python31*") do if exist "%%D\python.exe" set "PYEXE=%%D\python.exe"
 if not defined PYEXE (
     echo     FAIL: no Python 3 found. Run SETUP.bat first.
     goto end
