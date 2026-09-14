@@ -19,8 +19,12 @@ echo.
 echo [2] Python packages:
 %PYEXE% -c "import websockets; print('    websockets OK', websockets.__version__)" 2>&1
 if errorlevel 1 (
-    echo     FAIL: websockets missing. Fix: %PYEXE% -m pip install websockets
-    goto end
+    echo     websockets missing - installing now...
+    %PYEXE% -m pip install --quiet websockets tzdata
+    %PYEXE% -c "import websockets; print('    websockets OK', websockets.__version__)" 2>&1 || (
+        echo     FAIL: could not install. Fix manually: %PYEXE% -m pip install websockets tzdata
+        goto end
+    )
 )
 %PYEXE% -c "import tzdata; print('    tzdata OK')" 2>&1
 if errorlevel 1 (
