@@ -5,3 +5,5 @@ tracker_stdout.log
 __pycache__/
 recon/
 *.log
+
+console_profile/
