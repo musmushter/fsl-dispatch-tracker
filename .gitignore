@@ -7,3 +7,5 @@ recon/
 *.log
 
 console_profile/
+
+settings.json

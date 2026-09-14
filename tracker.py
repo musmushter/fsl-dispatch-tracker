@@ -39,7 +39,32 @@ VERSION = "1.1"
 
 BASE = r"C:/Users/musta/fsl_tracker"
 STATE_FILE = BASE + r"/state.json"
+SETTINGS_FILE = BASE + r"/settings.json"
 EVENTS_FILE = BASE + r"/events.jsonl"
+
+# ---------------- alert customization ----------------
+# settings.json: {"muted_types": [...], "muted_drivers": [...]} — user-editable
+# from the dashboard gear menu (POST /settings) or by hand. Muted alert types
+# are dropped from state.json AND never fire Windows toasts.
+DEFAULT_SETTINGS = {"muted_types": [], "muted_drivers": []}
+SETTINGS = dict(DEFAULT_SETTINGS)
+
+def load_settings():
+    global SETTINGS
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        SETTINGS = {"muted_types": list(data.get("muted_types") or []),
+                    "muted_drivers": list(data.get("muted_drivers") or [])}
+    except Exception:
+        SETTINGS = dict(DEFAULT_SETTINGS)
+
+def save_settings():
+    try:
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(SETTINGS, f, indent=1)
+    except Exception as e:
+        print("settings save failed:", e, flush=True)
 
 # ---------------- alert configuration ----------------
 DISPATCH_OVERDUE_MIN = 10      # Dispatched > 10 min without En Route
@@ -792,6 +817,11 @@ class State:
     def snapshot(self):
         now = now_ms()
         alerts = self.compute_alerts()
+        muted_types = set(SETTINGS.get("muted_types") or [])
+        muted_drivers = {x.lower() for x in (SETTINGS.get("muted_drivers") or [])}
+        alerts = {k: a for k, a in alerts.items()
+                  if a.get("type") not in muted_types
+                  and a.get("driver", "").split("(")[0].strip().lower() not in muted_drivers}
         # fire new urgent alerts
         for key, a in alerts.items():
             if key not in self.alerts and a["level"] == "urgent":
@@ -1429,6 +1459,7 @@ async def run():
 
 
 if __name__ == "__main__":
+    load_settings()
     import http.server
     import socketserver
     import threading
@@ -1447,10 +1478,43 @@ if __name__ == "__main__":
                 self.send_header("Location", "/dashboard.html")
                 self.end_headers()
                 return
+            if path == "/settings":
+                # read-only view of mute prefs so any viewer's gear menu stays in sync
+                out = json.dumps({"muted_types": SETTINGS.get("muted_types", []),
+                                  "muted_drivers": SETTINGS.get("muted_drivers", [])}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+                return
             if path not in ("/dashboard.html", "/state.json"):
                 self.send_error(404, "Not found")
                 return
             super().do_GET()
+
+        def do_POST(self):
+            # dashboard settings menu -> muting prefs (localhost + tunnel both OK;
+            # nothing else is writable and the body never touches the filesystem
+            # outside settings.json)
+            if self.path.split("?")[0] != "/settings":
+                self.send_error(404, "Not found")
+                return
+            try:
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n) or b"{}")
+                SETTINGS["muted_types"] = [str(x) for x in (body.get("muted_types") or [])]
+                SETTINGS["muted_drivers"] = [str(x) for x in (body.get("muted_drivers") or [])]
+                save_settings()
+                out = json.dumps({"ok": True}).encode()
+                self.send_response(200)
+            except Exception as e:
+                out = json.dumps({"ok": False, "err": str(e)}).encode()
+                self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
 
         def end_headers(self):
             # dashboard.html must always revalidate — stale JS = stale logic

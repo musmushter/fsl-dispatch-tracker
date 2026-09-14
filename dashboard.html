@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>FSL Tracker v2.3</title>
+<title>FSL Tracker v2.4</title>
 <style>
   :root { --fg:#e8e8e8; --bg:#14161a; --card:#1e2127; --border:#33373f;
           --red:#e5484d; --amber:#f5a623; --green:#46a758; --muted:#8b909c; }
@@ -17,6 +17,12 @@
   .alert { padding: 8px 12px; border-radius: 6px; margin-bottom: 6px; font-weight: 600;
            border-left: 4px solid; }
   .alert.urgent { background:#3a1517; border-color: var(--red); }
+#settings { border:1px solid var(--border); background: var(--card); border-radius:8px;
+            padding:10px 14px; margin:8px 0; font-size:13px; }
+#settings .sethint { color: var(--muted); font-size:11px; margin:4px 0; }
+#settings label { margin-right:14px; cursor:pointer; white-space:nowrap; }
+#settings .mutedchip { display:inline-block; background:rgba(229,72,77,.15); color:var(--red);
+            border-radius:4px; padding:1px 6px; margin-left:6px; font-size:11px; cursor:pointer; }
   .alert.minor  { background:#3a2f14; border-color: var(--amber); }
   .alert .d { font-weight: 400; color: var(--muted); margin-left: 6px; }
   .tblwrap { width: 100%; overflow-x: auto; }
@@ -87,9 +93,21 @@
 </style>
 </head>
 <body>
-<h1>FSL Dispatch Tracker <span style="color:#8b909c;font-size:11px">v2.3</span> <span id="conn" class="conn-bad">connecting</span>
+<h1>FSL Dispatch Tracker <span style="color:#8b909c;font-size:11px">v2.4</span> <span id="conn" class="conn-bad">connecting</span>
   <button id="bellbtn" class="repbtn" style="margin-left:auto" onclick="toggleAlerts()">🔔 Enable alerts</button>
+  <button id="gearbtn" class="repbtn" style="margin-left:6px" onclick="toggleSettings()">⚙ Alerts</button>
 </h1>
+<div id="settings" style="display:none">
+  <b>Alert customization</b>
+  <div class="sethint">Unchecked = no flag on the board, no entry in the alert list, no Windows toast. Per-driver muting hides that driver's alerts only. Settings are saved in settings.json and apply to toasts + every viewer of this dashboard.</div>
+  <div id="settypes"></div>
+  <div style="margin-top:8px"><b>Mute a driver</b>
+    <select id="drvsellist"></select>
+    <button class="repbtn" onclick="muteDriver()">Mute</button>
+    <span id="mutedlist"></span>
+  </div>
+  <div id="setstatus" class="sethint"></div>
+</div>
 <div class="meta" id="meta">loading...</div>
 <div class="alerts" id="alerts"></div>
 <div class="tblwrap">
@@ -124,6 +142,7 @@ function render(s) {
   document.getElementById('meta').textContent =
     'Central ' + s.generated_central + ' | ' + s.rows.length + ' active drivers | updated ' +
     new Date(s.generated_at).toLocaleTimeString();
+  lastRows = s.rows || [];
   const al = document.getElementById('alerts');
   al.innerHTML = '';
   (s.alerts||[]).forEach(a => {
@@ -320,7 +339,72 @@ function toggleAlerts() {
     btn.classList.remove('copied');
   }
 }
+
+// ---- alert customization (gear) ----
+const ALERT_TYPES = [
+  ['DISPATCH_OVERDUE', 'Dispatch overdue (>10 min)'],
+  ['STANDING_STILL',   'Standing still (>10 min)'],
+  ['FAR_AWAY',         'Far away (>5 km)'],
+  ['ETA_EXPIRED',      'ETA exceeded'],
+  ['MEMBER_WAITING',   'Member waiting (>60 min)'],
+];
+let mutedTypes = [], mutedDrivers = [];
+function toggleSettings() {
+  const p = document.getElementById('settings');
+  const show = p.style.display === 'none';
+  p.style.display = show ? '' : 'none';
+  if (show) { buildSettingsPanel(); }
+}
+function buildSettingsPanel() {
+  const box = document.getElementById('settypes');
+  box.innerHTML = ALERT_TYPES.map(([t, label]) =>
+    '<label><input type="checkbox" ' + (mutedTypes.includes(t) ? '' : 'checked') +
+    ' onchange="setTypeMuted(\'' + t + '\', !this.checked)"> ' + label + '</label>').join('');
+  const sel = document.getElementById('drvsellist');
+  const names = (lastRows || []).map(r => (r.driver||'').split('(')[0].trim()).filter(Boolean);
+  const opts = [...new Set(names)].sort().map(n => '<option>' + n + '</option>').join('');
+  sel.innerHTML = opts || '<option>—</option>';
+  renderMutedChips();
+}
+function renderMutedChips() {
+  document.getElementById('mutedlist').innerHTML = mutedDrivers.map(d =>
+    '<span class="mutedchip" title="click to unmute" onclick="unmuteDriver(\'' + d.replace(/'/g, "\\'") + '\')">✕ ' + d + '</span>').join('');
+}
+async function pushSettings() {
+  document.getElementById('setstatus').textContent = 'saving...';
+  try {
+    const r = await fetch('/settings', { method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ muted_types: mutedTypes, muted_drivers: mutedDrivers }) });
+    const j = await r.json();
+    document.getElementById('setstatus').textContent = j.ok ? 'saved ✓ (applies within ~25 s)' : 'save FAILED: ' + j.err;
+  } catch(e) {
+    document.getElementById('setstatus').textContent = 'save failed (offline?): ' + e;
+  }
+}
+function setTypeMuted(t, muted) {
+  if (muted && !mutedTypes.includes(t)) mutedTypes.push(t);
+  if (!muted) mutedTypes = mutedTypes.filter(x => x !== t);
+  pushSettings();
+}
+function muteDriver() {
+  const n = document.getElementById('drvsellist').value;
+  if (n && n !== '—' && !mutedDrivers.includes(n)) { mutedDrivers.push(n); pushSettings(); renderMutedChips(); }
+}
+function unmuteDriver(d) {
+  mutedDrivers = mutedDrivers.filter(x => x !== d);
+  pushSettings(); renderMutedChips();
+}
+let lastRows = [];
 poll(); setInterval(poll, 5000);
+// pull current mute prefs so the panel reflects tracker state on open
+fetch('/settings').then(r => r.json()).then(j => {
+  mutedTypes = j.muted_types || [];
+  mutedDrivers = j.muted_drivers || [];
+}).catch(()=>{});
+setInterval(() => { fetch('/settings').then(r=>r.json()).then(j => {
+  mutedTypes = j.muted_types || []; mutedDrivers = j.muted_drivers || [];
+}).catch(()=>{}); }, 15000);
 </script>
 </body>
 </html>
