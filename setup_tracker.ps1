@@ -12,9 +12,12 @@ WHAT IT DOES
   6. Launches the console Chrome so the user can log in with THEIR AAA credentials
 #>
 $ErrorActionPreference = "Stop"
-Start-Transcript -Path (Join-Path $dir "setup_log.txt") -Append | Out-Null
-$dir = Split-Path -Parent $MyInvocation.MyCommand.Path
+# folder this script lives in: $PSScriptRoot (PS3+), fall back to Invocation/cwd
+$dir = $PSScriptRoot
+if (-not $dir) { $dir = Split-Path -Parent $MyInvocation.MyCommand.Path }
+if (-not $dir) { $dir = (Get-Location).Path }
 Set-Location $dir
+Start-Transcript -Path (Join-Path $dir "setup_log.txt") -Append | Out-Null
 
 # PowerShell 5.1 defaults to TLS 1.0 for downloads; python.org / dl.google.com
 # need TLS 1.2 or the installer download throws and (with Stop) kills the script
