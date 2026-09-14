@@ -101,7 +101,9 @@ def rule_matches(rule, ctx):
         val = ctx.get(c.get("field"))
         try:
             thr = c.get("value")
-            if isinstance(val, (int, float)) and isinstance(thr, str):
+            if isinstance(val, bool):
+                thr = str(thr).strip().lower() in ("true", "1", "yes")
+            elif isinstance(val, (int, float)) and isinstance(thr, str):
                 thr = float(thr)
         except Exception:
             thr = c.get("value")
@@ -738,7 +740,18 @@ class State:
 
             # --- user-defined rules ---
             if rules:
+                _eta = (self.etas.get(svc["sa_id"])
+                        or self.etas.get(svc.get("parent_id")))
+                _eta_current = (_eta if _eta and _eta["posted"] >=
+                                (svc.get("status_since") or 0) else None)
+                _eta_pass_min = None
+                if _eta_current and now > _eta_current["high"]:
+                    _eta_pass_min = round((now - _eta_current["high"]) / 60000, 1)
                 ctx = {"status": status,
+                       "eta_exists": bool(_eta_current),
+                       "eta_passed_min": _eta_pass_min,
+                       "eta_late_min": (round((now - _eta_current["low"]) / 60000, 1)
+                                        if _eta_current else None),
                        "enroute_min": base.get("enroute_min"),
                        "dispatch_min": base.get("dispatch_min"),
                        "wait_min": round((now - (svc.get("status_since")

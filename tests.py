@@ -712,6 +712,61 @@ try:
     check("T25c default threshold restored",
           any(a["type"] == "DISPATCH_OVERDUE" for a in _al6.values()))
 
+    # ---- T26: ETA conditions in custom rules ----
+    m.SETTINGS["disabled_builtins"] = []
+    m.SETTINGS["rules"] = []
+    m.SETTINGS["builtin_overrides"] = {}
+    _st.services["SA-T24"]["status"] = "En Route"
+    _st.services["SA-T24"]["status_since"] = now - 40*60000
+    _st.services["SA-T24"]["last_modified"] = now - 40*60000
+    _st.drivers["R1"]["pos"] = {"lat": 29.76, "lng": -95.36, "t": now}
+    _st.drivers["R1"]["history"] = [
+        {"lat": 29.76, "lng": -95.36, "t": now-600000},
+        {"lat": 29.7601, "lng": -95.3601, "t": now-300000},
+        {"lat": 29.7602, "lng": -95.3602, "t": now}]
+    _st.services["SA-T24"]["lat"] = 29.80; _st.services["SA-T24"]["lng"] = -95.40
+    _eta = {"posted": now - 39*60000, "low": now - 10*60000,
+            "high": now - 5*60000, "text": "x-y"}
+    _st.etas = {"SA-T24": _eta}
+    # rule: no ETA at all
+    m.SETTINGS["rules"] = [{"id":"e1","name":"no eta","enabled":True,"level":"minor",
+                            "match":"all","conds":[{"field":"eta_exists","op":"eq","value":"false"}]}]
+    _a = m.State.compute_alerts(_st)
+    check("T26a eta_exists=false does not fire when ETA present",
+          not any(a.get("rule_id")=="e1" for a in _a.values()))
+    _st.etas = {}
+    _a = m.State.compute_alerts(_st)
+    check("T26b eta_exists=false fires when no ETA",
+          any(a.get("rule_id")=="e1" for a in _a.values()))
+    # rule: ETA passed > 3 min ago
+    m.SETTINGS["rules"] = [{"id":"e2","name":"eta passed","enabled":True,"level":"urgent",
+                            "match":"all","conds":[{"field":"eta_exists","op":"eq","value":"true"},
+                                                    {"field":"eta_passed_min","op":"gte","value":3}]}]
+    _st.etas = {"SA-T24": _eta}   # high was 5 min ago -> passed 5 min
+    _a = m.State.compute_alerts(_st)
+    check("T26c eta_passed_min fires when window passed",
+          any(a.get("rule_id")=="e2" for a in _a.values()))
+    _eta2 = {"posted": now - 39*60000, "low": now + 10*60000,
+             "high": now + 15*60000, "text": "x-y"}
+    _st.etas = {"SA-T24": _eta2}  # future ETA
+    _a = m.State.compute_alerts(_st)
+    check("T26d future ETA: no fire",
+          not any(a.get("rule_id")=="e2" for a in _a.values()))
+    # stale ETA (posted before current status) must not count
+    _eta3 = {"posted": now - 50*60000, "low": now - 20*60000,
+             "high": now - 15*60000, "text": "x-y"}
+    _st.etas = {"SA-T24": _eta3}
+    m.SETTINGS["rules"] = [{"id":"e1","name":"no eta","enabled":True,"level":"minor",
+                            "match":"all","conds":[{"field":"eta_exists","op":"eq","value":"false"}]},
+                           {"id":"e2","name":"eta passed","enabled":True,"level":"urgent","match":"all",
+                            "conds":[{"field":"eta_exists","op":"eq","value":"true"},
+                                     {"field":"eta_passed_min","op":"gte","value":3}]}]
+    _a = m.State.compute_alerts(_st)
+    check("T26e stale ETA counts as no ETA",
+          any(a.get("rule_id")=="e1" for a in _a.values())
+          and not any(a.get("rule_id")=="e2" for a in _a.values()))
+    _st.etas = {}
+
     m.SETTINGS.clear(); m.SETTINGS.update(old_settings)
 finally:
     m.State.first_service = _orig
