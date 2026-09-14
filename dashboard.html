@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>FSL Tracker v2.4</title>
+<title>FSL Tracker v2.5</title>
 <style>
   :root { --fg:#e8e8e8; --bg:#14161a; --card:#1e2127; --border:#33373f;
           --red:#e5484d; --amber:#f5a623; --green:#46a758; --muted:#8b909c; }
@@ -93,7 +93,7 @@
 </style>
 </head>
 <body>
-<h1>FSL Dispatch Tracker <span style="color:#8b909c;font-size:11px">v2.4</span> <span id="conn" class="conn-bad">connecting</span>
+<h1>FSL Dispatch Tracker <span style="color:#8b909c;font-size:11px">v2.5</span> <span id="conn" class="conn-bad">connecting</span>
   <button id="bellbtn" class="repbtn" style="margin-left:auto" onclick="toggleAlerts()">🔔 Enable alerts</button>
   <button id="gearbtn" class="repbtn" style="margin-left:6px" onclick="toggleSettings()">⚙ Alerts</button>
 </h1>
@@ -106,6 +106,12 @@
     <button class="repbtn" onclick="muteDriver()">Mute</button>
     <span id="mutedlist"></span>
   </div>
+  <div style="margin-top:10px"><b>Custom alerts</b>
+    <button class="repbtn" style="margin-left:8px" onclick="toggleRuleForm()">＋ New alert</button>
+  </div>
+  <div class="sethint">A custom alert fires (flag on row + alert banner + Windows toast) whenever ALL of its conditions are true for a driver's current call. Leaving a built-in alert unchecked removes it entirely.</div>
+  <div id="ruleslist"></div>
+  <div id="ruleform" style="display:none; margin-top:8px; border-top:1px solid var(--border); padding-top:8px"></div>
   <div id="setstatus" class="sethint"></div>
 </div>
 <div class="meta" id="meta">loading...</div>
@@ -148,7 +154,7 @@ function render(s) {
   (s.alerts||[]).forEach(a => {
     const d = document.createElement('div');
     d.className = 'alert ' + (a.level==='urgent'?'urgent':'minor');
-    d.innerHTML = '<b>' + a.type + '</b> — ' + a.driver + ' <span class="d">' + a.detail + '</span>';
+    d.innerHTML = '<b>' + (a.type==='CUSTOM' ? (a.custom_name||'CUSTOM') : a.type) + '</b> — ' + a.driver + ' <span class="d">' + a.detail + '</span>';
     al.appendChild(d);
   });
   const tb = document.getElementById('rows');
@@ -309,7 +315,7 @@ function notifyLoop(s) {
   lastAlertKeys = keys;
   fresh.forEach(a => {
     try {
-      const n = new Notification(a.type + ' - ' + a.driver,
+      const n = new Notification((a.type==='CUSTOM' ? (a.custom_name||'CUSTOM') : a.type) + ' - ' + a.driver,
                                  { body: (a.detail || '') + ' (call ' + (a.call_id || '?') + ')',
                                    tag: a.type + a.driver + a.call_id });
       setTimeout(() => n.close(), 15000);
@@ -348,7 +354,23 @@ const ALERT_TYPES = [
   ['ETA_EXPIRED',      'ETA exceeded'],
   ['MEMBER_WAITING',   'Member waiting (>60 min)'],
 ];
-let mutedTypes = [], mutedDrivers = [];
+let mutedTypes = [], mutedDrivers = [], rules = [], disabledBuiltins = [];
+
+const RULE_FIELDS = [
+  ['status',      'Status'],
+  ['enroute_min', 'En Route for (min)'],
+  ['dispatch_min','Dispatched for (min)'],
+  ['wait_min',    'In current status for (min)'],
+  ['dist_km',     'Distance to call (km)'],
+  ['gps_age_min', 'GPS age (min)'],
+  ['work_type',   'Work type'],
+  ['driver',      'Driver name'],
+  ['call_id',     'Call ID'],
+];
+const RULE_OPS = [
+  ['eq', 'is'], ['ne', 'is not'], ['gte', '\u2265'], ['lte', '\u2264'],
+  ['gt', '>'], ['lt', '<'], ['contains', 'contains'],
+];
 function toggleSettings() {
   const p = document.getElementById('settings');
   const show = p.style.display === 'none';
@@ -357,9 +379,11 @@ function toggleSettings() {
 }
 function buildSettingsPanel() {
   const box = document.getElementById('settypes');
-  box.innerHTML = ALERT_TYPES.map(([t, label]) =>
-    '<label><input type="checkbox" ' + (mutedTypes.includes(t) ? '' : 'checked') +
-    ' onchange="setTypeMuted(\'' + t + '\', !this.checked)"> ' + label + '</label>').join('');
+  box.innerHTML = '<b>Built-in alerts</b> ' + ALERT_TYPES.map(([t, label]) =>
+    '<label><input type="checkbox" ' + (disabledBuiltins.includes(t) ? '' : 'checked') +
+    ' onchange="setBuiltinEnabled(\'' + t + '\', this.checked)"> ' + label + '</label>').join('');
+  renderRules();
+  renderRuleForm();
   const sel = document.getElementById('drvsellist');
   const names = (lastRows || []).map(r => (r.driver||'').split('(')[0].trim()).filter(Boolean);
   const opts = [...new Set(names)].sort().map(n => '<option>' + n + '</option>').join('');
@@ -375,17 +399,102 @@ async function pushSettings() {
   try {
     const r = await fetch('/settings', { method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ muted_types: mutedTypes, muted_drivers: mutedDrivers }) });
+      body: JSON.stringify({ muted_types: mutedTypes, muted_drivers: mutedDrivers,
+                             rules: rules, disabled_builtins: disabledBuiltins }) });
     const j = await r.json();
     document.getElementById('setstatus').textContent = j.ok ? 'saved ✓ (applies within ~25 s)' : 'save FAILED: ' + j.err;
   } catch(e) {
     document.getElementById('setstatus').textContent = 'save failed (offline?): ' + e;
   }
 }
-function setTypeMuted(t, muted) {
-  if (muted && !mutedTypes.includes(t)) mutedTypes.push(t);
-  if (!muted) mutedTypes = mutedTypes.filter(x => x !== t);
+function setBuiltinEnabled(t, on) {
+  if (on) disabledBuiltins = disabledBuiltins.filter(x => x !== t);
+  else if (!disabledBuiltins.includes(t)) disabledBuiltins.push(t);
   pushSettings();
+}
+function ruleSummary(r) {
+  return (r.conds||[]).map(c => {
+    const f = (RULE_FIELDS.find(x => x[0]===c.field)||[c.field,c.field])[1];
+    const o = (RULE_OPS.find(x => x[0]===c.op)||[c.op,c.op])[1];
+    return f + ' ' + o + ' ' + c.value;
+  }).join(' AND ' + (r.match==='any' ? ' OR ' : ' '));
+}
+function renderRules() {
+  const box = document.getElementById('ruleslist');
+  if (!rules.length) { box.innerHTML = '<div class="sethint">No custom alerts yet.</div>'; return; }
+  box.innerHTML = rules.map(r =>
+    '<div style="margin-top:4px">' +
+    '<label style="margin-right:6px"><input type="checkbox" ' + (r.enabled===false?'':'checked') +
+    ' onchange="setRuleEnabled(\'' + r.id + '\', this.checked)"> <b>' + esc(r.name) + '</b></label>' +
+    '<span class="sethint">' + esc(ruleSummary(r)) + '</span>' +
+    '<span class="mutedchip" style="background:rgba(245,166,35,.15);color:var(--amber)" ' +
+    'title="click to delete" onclick="delRule(\'' + r.id + '\')">✕ remove</span></div>').join('');
+}
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function setRuleEnabled(id, on) {
+  const r = rules.find(x => x.id === id); if (!r) return;
+  r.enabled = on; pushSettings();
+}
+function delRule(id) {
+  rules = rules.filter(x => x.id !== id); pushSettings(); renderRules();
+}
+// ---- rule form ----
+let formConds = [];
+function toggleRuleForm() {
+  const f = document.getElementById('ruleform');
+  const show = f.style.display === 'none';
+  if (show && !formConds.length) formConds = [{field:'enroute_min', op:'gte', value:''}];
+  f.style.display = show ? '' : 'none';
+  renderRuleForm();
+}
+function renderRuleForm() {
+  const f = document.getElementById('ruleform');
+  if (f.style.display === 'none') return;
+  f.innerHTML =
+    '<div><input id="rname" placeholder="Alert name (e.g. ER too long)" style="width:240px"> ' +
+    '<select id="rlevel"><option value="urgent">urgent (toast)</option><option value="minor">minor</option></select>' +
+    ' <label class="sethint"><input type="checkbox" id="ranym"> match ANY condition (default: all)</label></div>' +
+    formConds.map((c, i) =>
+      '<div style="margin-top:4px">' +
+      sel('rfield'+i, RULE_FIELDS, c.field) + ' ' +
+      sel('rop'+i, RULE_OPS, c.op) + ' ' +
+      '<input id="rval'+i+'" value="' + esc(c.value) + '" placeholder="value" style="width:110px"> ' +
+      (formConds.length>1 ? '<span class="mutedchip" onclick="delCond('+i+')">✕</span>' : '') +
+      '</div>').join('') +
+    '<div style="margin-top:6px">' +
+    '<button class="repbtn" onclick="addCond()">＋ condition</button> ' +
+    '<button class="repbtn copied" onclick="saveRule()">Save alert</button></div>';
+  // restore typed values across re-render
+  formConds.forEach((c,i) => { const el = document.getElementById('rval'+i); if (el && c.value!=='' ) el.value = c.value; });
+}
+function sel(id, pairs, cur) {
+  return '<select id="' + id + '" onchange="syncForm()">' +
+    pairs.map(([v,l]) => '<option value="'+v+'"'+(v===cur?' selected':'')+'>'+l+'</option>').join('') +
+    '</select>';
+}
+function syncForm() {
+  formConds.forEach((c,i) => {
+    c.field = document.getElementById('rfield'+i).value;
+    c.op = document.getElementById('rop'+i).value;
+    const v = document.getElementById('rval'+i).value;
+    c.value = v;
+  });
+}
+function addCond() { syncForm(); formConds.push({field:'wait_min', op:'gte', value:''}); renderRuleForm(); }
+function delCond(i) { syncForm(); formConds.splice(i,1); renderRuleForm(); }
+function saveRule() {
+  syncForm();
+  const name = document.getElementById('rname').value.trim();
+  if (!name) { document.getElementById('setstatus').textContent = 'give the alert a name first'; return; }
+  const conds = formConds.filter(c => String(c.value).trim() !== '');
+  if (!conds.length) { document.getElementById('setstatus').textContent = 'at least one condition needs a value'; return; }
+  rules.push({ id: 'r' + Date.now(), name, enabled: true,
+               level: document.getElementById('rlevel').value,
+               match: document.getElementById('ranym').checked ? 'any' : 'all',
+               conds });
+  formConds = [];
+  document.getElementById('ruleform').style.display = 'none';
+  pushSettings(); renderRules();
 }
 function muteDriver() {
   const n = document.getElementById('drvsellist').value;
@@ -401,9 +510,12 @@ poll(); setInterval(poll, 5000);
 fetch('/settings').then(r => r.json()).then(j => {
   mutedTypes = j.muted_types || [];
   mutedDrivers = j.muted_drivers || [];
+  rules = j.rules || [];
+  disabledBuiltins = j.disabled_builtins || [];
 }).catch(()=>{});
 setInterval(() => { fetch('/settings').then(r=>r.json()).then(j => {
   mutedTypes = j.muted_types || []; mutedDrivers = j.muted_drivers || [];
+  rules = j.rules || []; disabledBuiltins = j.disabled_builtins || [];
 }).catch(()=>{}); }, 15000);
 </script>
 </body>

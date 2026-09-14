@@ -46,7 +46,8 @@ EVENTS_FILE = BASE + r"/events.jsonl"
 # settings.json: {"muted_types": [...], "muted_drivers": [...]} — user-editable
 # from the dashboard gear menu (POST /settings) or by hand. Muted alert types
 # are dropped from state.json AND never fire Windows toasts.
-DEFAULT_SETTINGS = {"muted_types": [], "muted_drivers": []}
+DEFAULT_SETTINGS = {"muted_types": [], "muted_drivers": [],
+                    "rules": [], "disabled_builtins": []}
 SETTINGS = dict(DEFAULT_SETTINGS)
 
 def load_settings():
@@ -55,7 +56,9 @@ def load_settings():
         with open(SETTINGS_FILE, encoding="utf-8") as f:
             data = json.load(f)
         SETTINGS = {"muted_types": list(data.get("muted_types") or []),
-                    "muted_drivers": list(data.get("muted_drivers") or [])}
+                    "muted_drivers": list(data.get("muted_drivers") or []),
+                    "rules": list(data.get("rules") or []),
+                    "disabled_builtins": list(data.get("disabled_builtins") or [])}
     except Exception:
         SETTINGS = dict(DEFAULT_SETTINGS)
 
@@ -65,6 +68,39 @@ def save_settings():
             json.dump(SETTINGS, f, indent=1)
     except Exception as e:
         print("settings save failed:", e, flush=True)
+
+# ---------------- custom alert rules ----------------
+_OPS = {
+    "eq":       lambda a, b: a == b,
+    "ne":       lambda a, b: a != b,
+    "gt":       lambda a, b: a is not None and a > b,
+    "gte":      lambda a, b: a is not None and a >= b,
+    "lt":       lambda a, b: a is not None and a < b,
+    "lte":      lambda a, b: a is not None and a <= b,
+    "contains": lambda a, b: b.lower() in str(a or "").lower(),
+}
+
+def rule_matches(rule, ctx):
+    """True when every (or any, per rule.match) condition holds for ctx."""
+    conds = rule.get("conds") or []
+    if not conds:
+        return False
+    fn = any if rule.get("match") == "any" else all
+    results = []
+    for c in conds:
+        val = ctx.get(c.get("field"))
+        try:
+            thr = c.get("value")
+            if isinstance(val, (int, float)) and isinstance(thr, str):
+                thr = float(thr)
+        except Exception:
+            thr = c.get("value")
+        op = _OPS.get(c.get("op") or "eq")
+        try:
+            results.append(bool(op(val, thr)) if op else False)
+        except Exception:
+            results.append(False)
+    return fn(results)
 
 # ---------------- alert configuration ----------------
 DISPATCH_OVERDUE_MIN = 10      # Dispatched > 10 min without En Route
@@ -562,6 +598,8 @@ class State:
     def compute_alerts(self):
         now = now_ms()
         active = {}
+        disabled = set(SETTINGS.get("disabled_builtins") or [])
+        rules = [r for r in (SETTINGS.get("rules") or []) if r.get("enabled", True)]
         # collect all drivers that have any live service
         rids = {s["resource_id"] for s in self.services.values()
                 if not self.cleared(s) and not self.future_day(s)
@@ -598,7 +636,8 @@ class State:
                 since = svc.get("status_since") or svc.get("last_modified") or now
                 mins = (now - since) / 60000
                 base["dispatch_min"] = round(mins, 1)
-                if mins >= DISPATCH_OVERDUE_MIN and not self.busy_on_rap(rid):
+                if mins >= DISPATCH_OVERDUE_MIN and not self.busy_on_rap(rid) \
+                        and "DISPATCH_OVERDUE" not in disabled:
                     key = f"dispatch:{svc['sa_id']}"
                     active[key] = {**base, "type": "DISPATCH_OVERDUE",
                                    "detail": f"Dispatched {mins:.0f} min without En Route",
@@ -636,14 +675,15 @@ class State:
                     # at the service location = probably forgot to flip status
                     elif dist_m is not None and dist_m <= AT_LOCATION_RADIUS_M:
                         pass  # no alert; shown as AT LOC on the board
-                    elif dist_m is not None and dist_m >= FAR_DISTANCE_M:
+                    elif ("FAR_AWAY" not in disabled and dist_m is not None
+                          and dist_m >= FAR_DISTANCE_M):
                         key = f"far:{svc['sa_id']}"
                         active[key] = {**base, "type": "FAR_AWAY",
                                        "detail": (f"Standstill {STANDSTILL_MIN}+ min, "
                                                   f"still {dist_m/1000:.1f} km from service"),
                                        "level": "urgent",
                                        "since": now - STANDSTILL_MIN * 60000}
-                    else:
+                    elif "STANDING_STILL" not in disabled:
                         key = f"still:{svc['sa_id']}"
                         active[key] = {**base, "type": "STANDING_STILL",
                                        "detail": f"No movement > {STANDSTILL_RADIUS_M} m in {STANDSTILL_MIN} min",
@@ -653,7 +693,7 @@ class State:
             if status == "Spotted":
                 since = svc.get("status_since") or svc.get("last_modified") or now
                 mins = (now - since) / 60000
-                if mins >= MEMBER_WAIT_MIN:
+                if mins >= MEMBER_WAIT_MIN and "MEMBER_WAITING" not in disabled:
                     key = f"wait:{svc['sa_id']}"
                     active[key] = {**base, "type": "MEMBER_WAITING",
                                    "detail": f"Member spotted/waiting {mins:.0f} min",
@@ -667,14 +707,38 @@ class State:
                 eta = (self.etas.get(svc["sa_id"])
                        or self.etas.get(svc.get("parent_id")))
                 if eta and eta["posted"] >= (svc.get("status_since") or 0):
-                    if now > eta["high"] and dist_m is not None \
-                            and dist_m > ETA_EXPIRED_DIST_M:
+                    if ("ETA_EXPIRED" not in disabled and now > eta["high"]
+                            and dist_m is not None
+                            and dist_m > ETA_EXPIRED_DIST_M):
                         key = f"etaexp:{svc['sa_id']}"
                         active[key] = {**base, "type": "ETA_EXPIRED",
                                        "detail": (f"ETA {eta['text'].upper()} passed "
                                                   f"{(now - eta['high'])/60000:.0f} min ago, "
                                                   f"still {dist_m/1000:.1f} km out"),
                                        "level": "urgent", "since": eta["high"]}
+
+            # --- user-defined rules ---
+            if rules:
+                ctx = {"status": status,
+                       "enroute_min": base.get("enroute_min"),
+                       "dispatch_min": base.get("dispatch_min"),
+                       "wait_min": round((now - (svc.get("status_since")
+                                         or svc.get("last_modified") or now))/60000, 1),
+                       "dist_km": round(dist_m/1000, 2) if dist_m is not None else None,
+                       "gps_age_min": round(gps_age_min, 1) if gps_age_min is not None else None,
+                       "work_type": svc.get("work_type"),
+                       "driver": name,
+                       "call_id": svc.get("call_id"),
+                       "moving": None}
+                for rule in rules:
+                    if not rule_matches(rule, ctx):
+                        continue
+                    key = f"custom:{rule.get('id')}:{svc['sa_id']}"
+                    active[key] = {**base, "type": "CUSTOM",
+                                   "custom_name": rule.get("name") or "Custom alert",
+                                   "detail": rule.get("name") or "Custom alert matched",
+                                   "level": rule.get("level") or "minor",
+                                   "rule_id": rule.get("id"), "since": now}
         return active
 
     def cleared_log(self):
@@ -928,7 +992,8 @@ class State:
                 "dropoff": self._dropoff_of(svc),
                 "dist_km": round(dist_m / 1000, 1) if dist_m is not None else None,
                 "gps_age_min": round((now - pos.get("t", 0)) / 60000, 1) if pos.get("t") else None,
-                "alerts": [a["type"] for k, a in alerts.items() if a["driver_id"] == rid],
+                "alerts": [(a.get("custom_name") if a["type"] == "CUSTOM" else a["type"])
+                           for k, a in alerts.items() if a["driver_id"] == rid],
             })
         rows.sort(key=lambda r: (self.driver_order.get(r["resource_id"], 10**6),
                                  str(r["driver"] or "")))
@@ -944,7 +1009,8 @@ class State:
 
 # ---------------- toast ----------------
 def fire_toast(alert):
-    title = f"{alert['type']} - {alert.get('driver', '?')}"
+    tname = alert.get('custom_name') or alert['type']
+    title = f"{tname} - {alert.get('driver', '?')}"
     body = f"{alert.get('detail', '')} (call {alert.get('call_id', '?')})"
     ps = f"""
 [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
@@ -1481,7 +1547,9 @@ if __name__ == "__main__":
             if path == "/settings":
                 # read-only view of mute prefs so any viewer's gear menu stays in sync
                 out = json.dumps({"muted_types": SETTINGS.get("muted_types", []),
-                                  "muted_drivers": SETTINGS.get("muted_drivers", [])}).encode()
+                                  "muted_drivers": SETTINGS.get("muted_drivers", []),
+                                  "rules": SETTINGS.get("rules", []),
+                                  "disabled_builtins": SETTINGS.get("disabled_builtins", [])}).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(out)))
@@ -1505,6 +1573,8 @@ if __name__ == "__main__":
                 body = json.loads(self.rfile.read(n) or b"{}")
                 SETTINGS["muted_types"] = [str(x) for x in (body.get("muted_types") or [])]
                 SETTINGS["muted_drivers"] = [str(x) for x in (body.get("muted_drivers") or [])]
+                SETTINGS["rules"] = [r for r in (body.get("rules") or []) if isinstance(r, dict)]
+                SETTINGS["disabled_builtins"] = [str(x) for x in (body.get("disabled_builtins") or [])]
                 save_settings()
                 out = json.dumps({"ok": True}).encode()
                 self.send_response(200)
