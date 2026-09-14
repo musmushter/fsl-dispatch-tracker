@@ -628,6 +628,74 @@ st22.services['08pT22r']['cleared_at'] = m.now_ms()
 check("T22b RAP cleared -> Dispatched restored",
       [r for r in st22.snapshot()['rows'] if r['driver'] == 'D22'][0]['status'] == 'Dispatched')
 
+# ---- T23: custom rule engine ----
+_r1 = {"id":"x","name":"ER>25","match":"all","conds":[
+    {"field":"status","op":"eq","value":"En Route"},
+    {"field":"enroute_min","op":"gte","value":25}]}
+_ctx = {"status":"En Route","enroute_min":31.0,"dist_km":2.0}
+check("T23a rule all-match fires", m.rule_matches(_r1, _ctx) is True)
+check("T23b rule below threshold", m.rule_matches(_r1, {"status":"En Route","enroute_min":10}) is False)
+check("T23c rule wrong status", m.rule_matches(_r1, {"status":"Dispatched","enroute_min":31}) is False)
+_r2 = {"id":"y","name":"any","match":"any","conds":[
+    {"field":"status","op":"eq","value":"On Location"},
+    {"field":"enroute_min","op":"gte","value":25}]}
+check("T23d rule any-match", m.rule_matches(_r2, _ctx) is True)
+check("T23e empty conds never fire", m.rule_matches({"conds":[]}, _ctx) is False)
+check("T23f contains op", m.rule_matches(
+    {"conds":[{"field":"work_type","op":"contains","value":"tow"}]},
+    {"work_type":"Passenger Car Tow"}) is True)
+check("T23g null field with gte is safe", m.rule_matches(
+    {"conds":[{"field":"dist_km","op":"gte","value":5}]}, {"dist_km":None}) is False)
+
+# ---- T24: disabled builtins gate emissions ----
+_st = m.State.__new__(m.State)  # bare instance
+def _svc(**kw):
+    base = {"sa_id":"SA-T24","resource_id":"R1","call_id":"C1","status":"Dispatched",
+            "status_since": now - 30*60000, "last_modified": now - 30*60000,
+            "cleared": False, "chain_second": False, "work_type":"Tow",
+            "sched_start": now, "appt":"x"}
+    base.update(kw); return base
+_svc_obj = _svc()
+_st.services = {"SA-T24": _svc_obj}
+_st.drivers = {"R1": {"pos": {"lat": None, "lng": None, "t": None}, "history": []}}
+_st.alerts = {}
+_st.etas = {}
+_st.cleared_log = lambda self=None: []
+_orig = m.State.first_service
+m.State.first_service = lambda self, rid: _svc()
+m.State.busy_on_rap = lambda self, rid: False
+m.State.driver_name = lambda self, rid: "Test Driver"
+m.State.is_external = lambda self, s: False
+m.State.future_day = lambda self, s: False
+m.State.cleared = lambda self, s: False
+m.drivers_pos = {}
+try:
+    old_settings = dict(m.SETTINGS)
+    m.SETTINGS["disabled_builtins"] = ["DISPATCH_OVERDUE"]
+    m.SETTINGS["rules"] = []
+    _al = m.State.compute_alerts(_st)
+    check("T24a disabled builtin suppressed",
+          not any(a["type"]=="DISPATCH_OVERDUE" for a in _al.values()))
+    m.SETTINGS["disabled_builtins"] = []
+    m.SETTINGS["rules"] = [{"id":"c1","name":"Disp>20","enabled":True,"level":"urgent",
+                            "match":"all","conds":[{"field":"dispatch_min","op":"gte","value":20}]}]
+    _al2 = m.State.compute_alerts(_st)
+    types2 = [a["type"] for a in _al2.values()]
+    check("T24b builtin fires when enabled", "DISPATCH_OVERDUE" in types2)
+    customs = [a for a in _al2.values() if a["type"]=="CUSTOM"]
+    check("T24c custom rule fires", len(customs)==1 and customs[0]["custom_name"]=="Disp>20",
+          f"-> {types2}")
+    check("T24d custom key binds to service",
+          any(k.startswith("custom:c1:SA-T24") for k in _al2))
+    m.SETTINGS["rules"] = [{"id":"c2","name":"no","enabled":True,"match":"all",
+                            "conds":[{"field":"dispatch_min","op":"gte","value":90}]}]
+    _al3 = m.State.compute_alerts(_st)
+    check("T24e custom rule not matched stays silent",
+          not any(a["type"]=="CUSTOM" for a in _al3.values()))
+    m.SETTINGS.clear(); m.SETTINGS.update(old_settings)
+finally:
+    m.State.first_service = _orig
+
 print(f"{ok} passed, {fail} failed")
 
 # ---- T23: custom rule engine ----
