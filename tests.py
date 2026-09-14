@@ -813,6 +813,26 @@ for _txt, _lo, _hi in _eta_cases:
               okc and _nums[0] == _lo and (_nums[-1] == _hi if _lo != _hi or len(_nums)>1 else True),
               f"-> {_got and _got['text']}")
 
+
+# ---- T28: 2ND KMI driver commitment = monitored ETA ----
+_kmi2_cases = [
+    ("2ND KMI ETA UPDT .. This is All American Towing. We received your request and our driver will be there in 60-75 minutes or less. Please, text us back", 60, 75),
+    ("2NDKMI updated eta 30-35 mins", 30, 35),
+    ("2ND KMI .. driver will be there in 45 minutes", 45, 45),
+    ("2ND KMI NO ANSWER TXT SENT", None, None),
+    ("2ND KMI MBR CONFIRMED LOCATION AND VEHICLE", None, None),
+    ("2ND KMI attempt: call ID 596104 placed", None, None),
+    ("1ST KMI DIDN'T STICK....KMI MBR VRFY ADDRESS AND VHCL...MBR ADVS 20 MINS OR LESS", None, None),
+]
+for _txt, _lo, _hi in _kmi2_cases:
+    _got = _eta_parse(_txt)
+    if _lo is None:
+        check("T28 no-match: " + _txt[:36], _got is None, f"-> {_got and _got['text']}")
+    else:
+        _nums = [int(x) for x in re.findall(r"\d+", _got["text"])] if _got else []
+        check("T28 parse: " + _txt[:36],
+              _got is not None and _nums[0] == _lo and _nums[-1] == _hi,
+              f"-> {_got and _got['text']}")
 print(f"{ok} passed, {fail} failed")
 
 # ---- T23: custom rule engine ----

@@ -163,6 +163,11 @@ def sf_ms_to_epoch(ms):
 
 ETA_RANGE_RE = re.compile(r"ETA[^0-9\n]{0,12}?(\d{1,3})\s*(?:[-–/]|to\b)\s*(\d{1,3})\s*(?:m(?:in)?(?:s|utes?)?)?\b", re.I)
 ETA_SINGLE_RE = re.compile(r"ETA[^0-9\n]{0,12}?(\d{1,3})\s*(?:m(?:in)?(?:s|utes?)?)?\b", re.I)
+# 2ND KMI: driver's renewed commitment after a second contact attempt —
+# '2ND KMI ETA UPDT .. driver will be there in 60-75 minutes or less'.
+# Numbers need a time unit so call-IDs/random digits can't match.
+KMI2_RANGE_RE = re.compile(r"2\s*nd\s*kmi(?:(?!\d).){0,200}?(\d{1,3})\s*(?:[-–/]|to\b)\s*(\d{1,3})\s*(m(?:in)?(?:s|utes?)?)\b", re.I | re.S)
+KMI2_SINGLE_RE = re.compile(r"2\s*nd\s*kmi(?:(?!\d).){0,200}?(\d{1,3})\s*(m(?:in)?(?:s|utes?)?)\b", re.I | re.S)
 # external/contractor resources arrive as "198114 - Jamal Awawda" (bare
 # numeric prefix, no phone block) — user wants them off the tracker entirely
 EXTERNAL_NAME_RE = re.compile(r"^\d{3,}\s*[-–]\s*\S")
@@ -227,7 +232,23 @@ def parse_eta_from_feed(body, ref_epoch_ms):
         clean = clean.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
         em = ETA_RANGE_RE.search(clean) or ETA_SINGLE_RE.search(clean)
         if not em:
-            continue
+            # 2ND KMI commitments carry the driver's renewed ETA without the
+            # 'ETA n MIN' keyword ('...driver will be there in 60-75 minutes')
+            em = KMI2_RANGE_RE.search(clean) or KMI2_SINGLE_RE.search(clean)
+            if not em:
+                continue
+            # KMI2 match spans from '2ND KMI' to the numbers; narrow to the
+            # numeric tail so lo/hi parse from the numbers, and the stored
+            # text stays clean
+            # narrow to the numbers, skipping the leading '2' of '2ND':
+            pairs = re.search(r"(\d{1,3})\s*(?:[-–/]|to\b)\s*(\d{1,3})", em.group(0))
+            if pairs:
+                em = pairs
+            else:
+                singles = list(re.finditer(r"(\d{1,3})", em.group(0)))
+                em = singles[-1] if singles else None
+                if em is None:
+                    continue
         lo = int(em.group(1))
         hi = int(em.group(2)) if em.lastindex and em.lastindex >= 2 else lo
         # post time: first 'Today/Yesterday at H:MM' after the text block
