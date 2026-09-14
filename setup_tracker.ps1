@@ -12,6 +12,7 @@ WHAT IT DOES
   6. Launches the console Chrome so the user can log in with THEIR AAA credentials
 #>
 $ErrorActionPreference = "Stop"
+Start-Transcript -Path (Join-Path $dir "setup_log.txt") -Append | Out-Null
 $dir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $dir
 
@@ -156,4 +157,5 @@ Write-Host "   Start Menu -> 'FSL Tracker'          (the tracker itself)"
 Write-Host " Keep the console Chrome window OPEN during your shift"
 Write-Host " (minimizing is fine)."
 Write-Host "============================================================" -ForegroundColor Green
+Stop-Transcript | Out-Null
 pause

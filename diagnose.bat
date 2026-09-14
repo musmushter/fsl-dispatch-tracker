@@ -2,7 +2,7 @@
 cd /d "%~dp0"
 echo ============================================
 echo  FSL TRACKER - DIAGNOSTIC RUN
-echo  (this window stays open; copy ALL its text)
+echo  (this window stays open; copy ALL its text - or send diagnose_log.txt)
 echo ============================================
 echo.
 echo [1] Python check:
@@ -45,7 +45,8 @@ echo ------------------------------------------------------------
 echo -----------------------------------------------------------
 echo [5] Tracker exited with code %errorlevel%.
 :end
+(echo ===== DIAGNOSE RUN %date% %time% & echo.) > diagnose_log.txt
 echo.
-echo Copy this whole window (right-click title bar -> Edit -> Select All, Enter)
+echo Copy this whole window (right-click title bar -> Edit -> Select All, Enter),
 echo and send it back.
 pause
