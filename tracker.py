@@ -161,8 +161,8 @@ def sf_ms_to_epoch(ms):
     return ms + off
 
 
-ETA_RANGE_RE = re.compile(r"ETA\s*(?:is|@|:|-)?\s*(\d{1,3})\s*[-–]\s*(\d{1,3})\s*M", re.I)
-ETA_SINGLE_RE = re.compile(r"ETA\s*(?:is|@|:|-)?\s*(\d{1,3})\s*M", re.I)
+ETA_RANGE_RE = re.compile(r"ETA[^0-9\n]{0,12}?(\d{1,3})\s*(?:[-–/]|to\b)\s*(\d{1,3})\s*(?:m(?:in)?(?:s|utes?)?)?\b", re.I)
+ETA_SINGLE_RE = re.compile(r"ETA[^0-9\n]{0,12}?(\d{1,3})\s*(?:m(?:in)?(?:s|utes?)?)?\b", re.I)
 # external/contractor resources arrive as "198114 - Jamal Awawda" (bare
 # numeric prefix, no phone block) — user wants them off the tracker entirely
 EXTERNAL_NAME_RE = re.compile(r"^\d{3,}\s*[-–]\s*\S")

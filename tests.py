@@ -1,5 +1,5 @@
 """Regression tests for tracker alert logic + SF time encoding + ETA parser."""
-import json, time, importlib.util, sys, datetime as dt
+import json, time, importlib.util, sys, datetime as dt, re
 from zoneinfo import ZoneInfo
 
 spec = importlib.util.spec_from_file_location('tracker', r'C:/Users/musta/fsl_tracker/tracker.py')
@@ -770,6 +770,48 @@ try:
     m.SETTINGS.clear(); m.SETTINGS.update(old_settings)
 finally:
     m.State.first_service = _orig
+
+
+# ---- T27: ETA regex against real feed wording (scouted 2026-09-14, 80 WO feeds) ----
+def _eta_parse(body_text):
+    # wrap text the way feed HTML does so FEED_TEXT_RE finds it
+    html = '<span class="feeditemtext"> ' + body_text + ' </span>' + \
+           '<span class="feeditemtext">Today at 3:00 PM</span>'
+    return m.parse_eta_from_feed(html, now)
+
+_eta_cases = [
+    # (comment text, expected low-min, high-min or None for no-match)
+    ("MIF ETA 25-30MINS", 25, 30),
+    ("ETA 15 to 20 minutes", 15, 20),
+    ("Have delay eta35/45mins", 35, 45),
+    ("---kmi--updated eta---15-20min---mbr cb nap//lrm//rs", 15, 20),
+    ("ETA 10-15 MINS BY SD", 10, 15),
+    ("c 631252 eta 20-25mins spoke w/Fabi", 20, 25),
+    ("ETA is 10-15 min", 10, 15),
+    ("ETA 25MIN< STEPH", 25, 25),
+    ("ETA 15 PER DRIVER", 15, 15),
+    ("ETA Confirmed 25 minutes", 25, 25),
+    ("ETA 30 minutes", 30, 30),
+    ("ETA 12 MIN", 12, 12),
+    # no-match cases
+    ("INC - Expired - 631", None, None),
+    ("inc ics 1252 adv", None, None),
+    ("ETA was updated", None, None),
+    ("eta given", None, None),
+    ("driver will call mbr for eta", None, None),
+    ("ETA 2026-08-09 timestamp", None, None),
+]
+for _txt, _lo, _hi in _eta_cases:
+    _got = _eta_parse(_txt)
+    if _lo is None:
+        check("T27 no-match: " + _txt[:34], _got is None,
+              f"-> {_got and _got['text']}")
+    else:
+        okc = _got is not None and _got["text"]
+        _nums = [int(x) for x in re.findall(r"\d+", _got["text"])] if okc else []
+        check("T27 parse: " + _txt[:34],
+              okc and _nums[0] == _lo and (_nums[-1] == _hi if _lo != _hi or len(_nums)>1 else True),
+              f"-> {_got and _got['text']}")
 
 print(f"{ok} passed, {fail} failed")
 
