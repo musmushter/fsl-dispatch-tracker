@@ -47,7 +47,8 @@ EVENTS_FILE = BASE + r"/events.jsonl"
 # from the dashboard gear menu (POST /settings) or by hand. Muted alert types
 # are dropped from state.json AND never fire Windows toasts.
 DEFAULT_SETTINGS = {"muted_types": [], "muted_drivers": [],
-                    "rules": [], "disabled_builtins": []}
+                    "rules": [], "disabled_builtins": [],
+                    "builtin_overrides": {}}
 SETTINGS = dict(DEFAULT_SETTINGS)
 
 def load_settings():
@@ -58,7 +59,8 @@ def load_settings():
         SETTINGS = {"muted_types": list(data.get("muted_types") or []),
                     "muted_drivers": list(data.get("muted_drivers") or []),
                     "rules": list(data.get("rules") or []),
-                    "disabled_builtins": list(data.get("disabled_builtins") or [])}
+                    "disabled_builtins": list(data.get("disabled_builtins") or []),
+                    "builtin_overrides": dict(data.get("builtin_overrides") or {})}
     except Exception:
         SETTINGS = dict(DEFAULT_SETTINGS)
 
@@ -79,6 +81,14 @@ _OPS = {
     "lte":      lambda a, b: a is not None and a <= b,
     "contains": lambda a, b: b.lower() in str(a or "").lower(),
 }
+
+def builtin_threshold(atype, key, default):
+    """User-tuned threshold for a built-in alert (settings gear -> Modify)."""
+    try:
+        v = (SETTINGS.get("builtin_overrides") or {}).get(atype, {}).get(key)
+        return default if v is None else float(v)
+    except Exception:
+        return default
 
 def rule_matches(rule, ctx):
     """True when every (or any, per rule.match) condition holds for ctx."""
@@ -636,7 +646,9 @@ class State:
                 since = svc.get("status_since") or svc.get("last_modified") or now
                 mins = (now - since) / 60000
                 base["dispatch_min"] = round(mins, 1)
-                if mins >= DISPATCH_OVERDUE_MIN and not self.busy_on_rap(rid) \
+                if mins >= builtin_threshold("DISPATCH_OVERDUE", "dispatch_min",
+                                             DISPATCH_OVERDUE_MIN) \
+                        and not self.busy_on_rap(rid) \
                         and "DISPATCH_OVERDUE" not in disabled:
                     key = f"dispatch:{svc['sa_id']}"
                     active[key] = {**base, "type": "DISPATCH_OVERDUE",
@@ -652,9 +664,10 @@ class State:
                 base["dist_m"] = int(dist_m) if dist_m is not None else None
                 base["gps_age_min"] = round(gps_age_min, 1) if gps_age_min is not None else None
                 # standing still: all positions in last STANDSTILL_MIN within radius
-                recent = [h for h in hist if now - h["t"] <= STANDSTILL_MIN * 60000 * 1.2]
+                still_min = builtin_threshold("STANDING_STILL", "wait_min", STANDSTILL_MIN)
+                recent = [h for h in hist if now - h["t"] <= still_min * 60000 * 1.2]
                 still = False
-                if len(recent) >= 3 and enroute_min >= STANDSTILL_MIN:
+                if len(recent) >= 3 and enroute_min >= still_min:
                     span = max(haversine_m(a["lat"], a["lng"], b["lat"], b["lng"])
                                for a in recent for b in recent)
                     still = span <= STANDSTILL_RADIUS_M
@@ -676,24 +689,29 @@ class State:
                     elif dist_m is not None and dist_m <= AT_LOCATION_RADIUS_M:
                         pass  # no alert; shown as AT LOC on the board
                     elif ("FAR_AWAY" not in disabled and dist_m is not None
-                          and dist_m >= FAR_DISTANCE_M):
+                          and dist_m >= builtin_threshold("FAR_AWAY", "dist_km",
+                                                          FAR_DISTANCE_M)):
                         key = f"far:{svc['sa_id']}"
                         active[key] = {**base, "type": "FAR_AWAY",
-                                       "detail": (f"Standstill {STANDSTILL_MIN}+ min, "
+                                       "detail": (f"Standstill {still_min:.0f}+ min, "
                                                   f"still {dist_m/1000:.1f} km from service"),
                                        "level": "urgent",
                                        "since": now - STANDSTILL_MIN * 60000}
                     elif "STANDING_STILL" not in disabled:
                         key = f"still:{svc['sa_id']}"
                         active[key] = {**base, "type": "STANDING_STILL",
-                                       "detail": f"No movement > {STANDSTILL_RADIUS_M} m in {STANDSTILL_MIN} min",
-                                       "level": "urgent", "since": now - STANDSTILL_MIN * 60000}
+                                       "detail": (f"No movement > {STANDSTILL_RADIUS_M} m "
+                                                  f"in {still_min:.0f} min"),
+                                       "level": "urgent",
+                                       "since": now - still_min * 60000}
 
             # --- member waiting (Spotted) ---
             if status == "Spotted":
                 since = svc.get("status_since") or svc.get("last_modified") or now
                 mins = (now - since) / 60000
-                if mins >= MEMBER_WAIT_MIN and "MEMBER_WAITING" not in disabled:
+                if mins >= builtin_threshold("MEMBER_WAITING", "wait_min",
+                                             MEMBER_WAIT_MIN) \
+                        and "MEMBER_WAITING" not in disabled:
                     key = f"wait:{svc['sa_id']}"
                     active[key] = {**base, "type": "MEMBER_WAITING",
                                    "detail": f"Member spotted/waiting {mins:.0f} min",
@@ -709,7 +727,8 @@ class State:
                 if eta and eta["posted"] >= (svc.get("status_since") or 0):
                     if ("ETA_EXPIRED" not in disabled and now > eta["high"]
                             and dist_m is not None
-                            and dist_m > ETA_EXPIRED_DIST_M):
+                            and dist_m > builtin_threshold("ETA_EXPIRED", "dist_km",
+                                                           ETA_EXPIRED_DIST_M)):
                         key = f"etaexp:{svc['sa_id']}"
                         active[key] = {**base, "type": "ETA_EXPIRED",
                                        "detail": (f"ETA {eta['text'].upper()} passed "
@@ -1549,7 +1568,8 @@ if __name__ == "__main__":
                 out = json.dumps({"muted_types": SETTINGS.get("muted_types", []),
                                   "muted_drivers": SETTINGS.get("muted_drivers", []),
                                   "rules": SETTINGS.get("rules", []),
-                                  "disabled_builtins": SETTINGS.get("disabled_builtins", [])}).encode()
+                                  "disabled_builtins": SETTINGS.get("disabled_builtins", []),
+                                  "builtin_overrides": SETTINGS.get("builtin_overrides", {})}).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(out)))
@@ -1575,6 +1595,9 @@ if __name__ == "__main__":
                 SETTINGS["muted_drivers"] = [str(x) for x in (body.get("muted_drivers") or [])]
                 SETTINGS["rules"] = [r for r in (body.get("rules") or []) if isinstance(r, dict)]
                 SETTINGS["disabled_builtins"] = [str(x) for x in (body.get("disabled_builtins") or [])]
+                SETTINGS["builtin_overrides"] = {k: dict(v) for k, v in
+                                                 (body.get("builtin_overrides") or {}).items()
+                                                 if isinstance(v, dict)}
                 save_settings()
                 out = json.dumps({"ok": True}).encode()
                 self.send_response(200)

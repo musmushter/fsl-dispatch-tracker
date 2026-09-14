@@ -692,6 +692,26 @@ try:
     _al3 = m.State.compute_alerts(_st)
     check("T24e custom rule not matched stays silent",
           not any(a["type"]=="CUSTOM" for a in _al3.values()))
+    # ---- T25: builtin threshold overrides ----
+    m.SETTINGS["disabled_builtins"] = []
+    m.SETTINGS["rules"] = []
+    m.SETTINGS["builtin_overrides"] = {"DISPATCH_OVERDUE": {"dispatch_min": 45}}
+    _al4 = m.State.compute_alerts(_st)   # dispatched 30 min ago
+    check("T25a override 45min suppresses 30min dispatch",
+          not any(a["type"] == "DISPATCH_OVERDUE" for a in _al4.values()))
+    _st.services["SA-T24"]["status_since"] = now - 50*60000
+    _st.services["SA-T24"]["last_modified"] = now - 50*60000
+    m.State.first_service = lambda self, rid: _st.services["SA-T24"]
+    _al5 = m.State.compute_alerts(_st)
+    check("T25b override 45min fires at 50min",
+          any(a["type"] == "DISPATCH_OVERDUE" for a in _al5.values()))
+    m.SETTINGS["builtin_overrides"] = {}
+    _st.services["SA-T24"]["status_since"] = now - 30*60000
+    _st.services["SA-T24"]["last_modified"] = now - 30*60000
+    _al6 = m.State.compute_alerts(_st)
+    check("T25c default threshold restored",
+          any(a["type"] == "DISPATCH_OVERDUE" for a in _al6.values()))
+
     m.SETTINGS.clear(); m.SETTINGS.update(old_settings)
 finally:
     m.State.first_service = _orig

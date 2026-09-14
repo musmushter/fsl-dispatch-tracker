@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>FSL Tracker v2.5</title>
+<title>FSL Tracker v2.6</title>
 <style>
   :root { --fg:#e8e8e8; --bg:#14161a; --card:#1e2127; --border:#33373f;
           --red:#e5484d; --amber:#f5a623; --green:#46a758; --muted:#8b909c; }
@@ -17,12 +17,30 @@
   .alert { padding: 8px 12px; border-radius: 6px; margin-bottom: 6px; font-weight: 600;
            border-left: 4px solid; }
   .alert.urgent { background:#3a1517; border-color: var(--red); }
-#settings { border:1px solid var(--border); background: var(--card); border-radius:8px;
-            padding:10px 14px; margin:8px 0; font-size:13px; }
+#settings-backdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,.55);
+            z-index:40; }
+#settings-backdrop.open { display:block; }
+#settings { display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+            z-index:41; width:min(560px, 92vw); max-height:84vh; overflow-y:auto;
+            background: var(--card); border:1px solid var(--border); border-radius:12px;
+            padding:16px 20px; font-size:13px; box-shadow:0 12px 40px rgba(0,0,0,.5); }
+#settings.open { display:block; }
+#settings h2 { margin:0 0 4px; font-size:15px; }
 #settings .sethint { color: var(--muted); font-size:11px; margin:4px 0; }
 #settings label { margin-right:14px; cursor:pointer; white-space:nowrap; }
-#settings .mutedchip { display:inline-block; background:rgba(229,72,77,.15); color:var(--red);
-            border-radius:4px; padding:1px 6px; margin-left:6px; font-size:11px; cursor:pointer; }
+.arow { display:flex; align-items:center; gap:10px; padding:7px 4px;
+        border-bottom:1px solid var(--border); }
+.arow:last-child { border-bottom:none; }
+.arow .aname { font-weight:600; }
+.arow .adef { color: var(--muted); font-size:11px; flex:1; }
+.abadge { display:inline-block; font-size:10px; border:1px solid var(--border);
+        color:var(--muted); border-radius:4px; padding:1px 6px; margin-left:6px; }
+.abtn { background:transparent; border:1px solid var(--border); color:var(--fg);
+        border-radius:6px; padding:3px 9px; cursor:pointer; font-size:12px; }
+.abtn:hover { border-color: var(--fg); }
+.abtn.warn { color: var(--red); }
+#settings select, #settings input { background:var(--bg); color:var(--fg);
+        border:1px solid var(--border); border-radius:5px; padding:3px 6px; font-size:12px; }
   .alert.minor  { background:#3a2f14; border-color: var(--amber); }
   .alert .d { font-weight: 400; color: var(--muted); margin-left: 6px; }
   .tblwrap { width: 100%; overflow-x: auto; }
@@ -93,25 +111,17 @@
 </style>
 </head>
 <body>
-<h1>FSL Dispatch Tracker <span style="color:#8b909c;font-size:11px">v2.5</span> <span id="conn" class="conn-bad">connecting</span>
+<h1>FSL Dispatch Tracker <span style="color:#8b909c;font-size:11px">v2.6</span> <span id="conn" class="conn-bad">connecting</span>
   <button id="bellbtn" class="repbtn" style="margin-left:auto" onclick="toggleAlerts()">🔔 Enable alerts</button>
   <button id="gearbtn" class="repbtn" style="margin-left:6px" onclick="toggleSettings()">⚙ Alerts</button>
 </h1>
-<div id="settings" style="display:none">
-  <b>Alert customization</b>
-  <div class="sethint">Unchecked = no flag on the board, no entry in the alert list, no Windows toast. Per-driver muting hides that driver's alerts only. Settings are saved in settings.json and apply to toasts + every viewer of this dashboard.</div>
-  <div id="settypes"></div>
-  <div style="margin-top:8px"><b>Mute a driver</b>
-    <select id="drvsellist"></select>
-    <button class="repbtn" onclick="muteDriver()">Mute</button>
-    <span id="mutedlist"></span>
-  </div>
-  <div style="margin-top:10px"><b>Custom alerts</b>
-    <button class="repbtn" style="margin-left:8px" onclick="toggleRuleForm()">＋ New alert</button>
-  </div>
-  <div class="sethint">A custom alert fires (flag on row + alert banner + Windows toast) whenever ALL of its conditions are true for a driver's current call. Leaving a built-in alert unchecked removes it entirely.</div>
-  <div id="ruleslist"></div>
-  <div id="ruleform" style="display:none; margin-top:8px; border-top:1px solid var(--border); padding-top:8px"></div>
+<div id="settings-backdrop" onclick="toggleSettings()"></div>
+<div id="settings">
+  <h2>Alerts</h2>
+  <div class="sethint">Disabled alerts are removed everywhere: no flag, no banner entry, no toast. Changes apply to every viewer of this dashboard within ~25 s.</div>
+  <div id="alist"></div>
+  <button class="abtn" style="margin-top:12px" onclick="toggleRuleForm()">＋ Add new alert</button>
+  <div id="ruleform" style="display:none; margin-top:10px; border-top:1px solid var(--border); padding-top:10px"></div>
   <div id="setstatus" class="sethint"></div>
 </div>
 <div class="meta" id="meta">loading...</div>
@@ -348,13 +358,22 @@ function toggleAlerts() {
 
 // ---- alert customization (gear) ----
 const ALERT_TYPES = [
-  ['DISPATCH_OVERDUE', 'Dispatch overdue (>10 min)'],
-  ['STANDING_STILL',   'Standing still (>10 min)'],
-  ['FAR_AWAY',         'Far away (>5 km)'],
-  ['ETA_EXPIRED',      'ETA exceeded'],
-  ['MEMBER_WAITING',   'Member waiting (>60 min)'],
+  ['DISPATCH_OVERDUE', 'Dispatch overdue', '>10 min without En Route'],
+  ['STANDING_STILL',   'Standing still', 'no movement >10 min while En Route'],
+  ['FAR_AWAY',         'Far away', 'still far from call after standing still'],
+  ['ETA_EXPIRED',      'ETA exceeded', 'posted ETA passed and still >6.7 km out'],
+  ['MEMBER_WAITING',   'Member waiting', 'member spotted >60 min'],
 ];
+// editable overrides for builtin thresholds (settings.json "builtin_overrides")
+const BUILTIN_FIELDS = {
+  DISPATCH_OVERDUE: [['dispatch_min','Dispatched for (min)']],
+  STANDING_STILL:   [['wait_min','In current status for (min)']],
+  FAR_AWAY:         [['dist_km','Distance to call (km)']],
+  ETA_EXPIRED:      [['dist_km','Distance to call (km)']],
+  MEMBER_WAITING:   [['wait_min','In current status for (min)']],
+};
 let mutedTypes = [], mutedDrivers = [], rules = [], disabledBuiltins = [];
+let builtinOverrides = {}, editingId = null;
 
 const RULE_FIELDS = [
   ['status',      'Status'],
@@ -363,26 +382,21 @@ const RULE_FIELDS = [
   ['wait_min',    'In current status for (min)'],
   ['dist_km',     'Distance to call (km)'],
   ['gps_age_min', 'GPS age (min)'],
-  ['work_type',   'Work type'],
-  ['driver',      'Driver name'],
-  ['call_id',     'Call ID'],
 ];
 const RULE_OPS = [
-  ['eq', 'is'], ['ne', 'is not'], ['gte', '\u2265'], ['lte', '\u2264'],
-  ['gt', '>'], ['lt', '<'], ['contains', 'contains'],
+  ['eq', '='], ['gte', '\u2265'], ['lte', '\u2264'],
+  ['gt', '>'], ['lt', '<'],
 ];
 function toggleSettings() {
   const p = document.getElementById('settings');
-  const show = p.style.display === 'none';
-  p.style.display = show ? '' : 'none';
+  const b = document.getElementById('settings-backdrop');
+  const show = !p.classList.contains('open');
+  p.classList.toggle('open', show);
+  b.classList.toggle('open', show);
   if (show) { buildSettingsPanel(); }
 }
 function buildSettingsPanel() {
-  const box = document.getElementById('settypes');
-  box.innerHTML = '<b>Built-in alerts</b> ' + ALERT_TYPES.map(([t, label]) =>
-    '<label><input type="checkbox" ' + (disabledBuiltins.includes(t) ? '' : 'checked') +
-    ' onchange="setBuiltinEnabled(\'' + t + '\', this.checked)"> ' + label + '</label>').join('');
-  renderRules();
+  renderAList();
   renderRuleForm();
   const sel = document.getElementById('drvsellist');
   const names = (lastRows || []).map(r => (r.driver||'').split('(')[0].trim()).filter(Boolean);
@@ -400,7 +414,8 @@ async function pushSettings() {
     const r = await fetch('/settings', { method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ muted_types: mutedTypes, muted_drivers: mutedDrivers,
-                             rules: rules, disabled_builtins: disabledBuiltins }) });
+                             rules: rules, disabled_builtins: disabledBuiltins,
+                             builtin_overrides: builtinOverrides }) });
     const j = await r.json();
     document.getElementById('setstatus').textContent = j.ok ? 'saved ✓ (applies within ~25 s)' : 'save FAILED: ' + j.err;
   } catch(e) {
@@ -419,16 +434,63 @@ function ruleSummary(r) {
     return f + ' ' + o + ' ' + c.value;
   }).join(' AND ' + (r.match==='any' ? ' OR ' : ' '));
 }
-function renderRules() {
-  const box = document.getElementById('ruleslist');
-  if (!rules.length) { box.innerHTML = '<div class="sethint">No custom alerts yet.</div>'; return; }
-  box.innerHTML = rules.map(r =>
-    '<div style="margin-top:4px">' +
-    '<label style="margin-right:6px"><input type="checkbox" ' + (r.enabled===false?'':'checked') +
-    ' onchange="setRuleEnabled(\'' + r.id + '\', this.checked)"> <b>' + esc(r.name) + '</b></label>' +
-    '<span class="sethint">' + esc(ruleSummary(r)) + '</span>' +
-    '<span class="mutedchip" style="background:rgba(245,166,35,.15);color:var(--amber)" ' +
-    'title="click to delete" onclick="delRule(\'' + r.id + '\')">✕ remove</span></div>').join('');
+function renderAList() {
+  const box = document.getElementById('alist');
+  const bi = ALERT_TYPES.map(([t, name, desc]) => {
+    const off = disabledBuiltins.includes(t);
+    const ov = (builtinOverrides[t] || {});
+    const parts = [];
+    for (const [k, v] of Object.entries(ov)) parts.push(k.replace('_min','') + '>=' + v);
+    const mod = parts.length ? ' <span class="abadge">modified: ' + parts.join(', ') + '</span>' : '';
+    return '<div class="arow">' +
+      '<input type="checkbox" ' + (off?'':'checked') + ' onchange="setBuiltinEnabled(\'' + t + '\', this.checked)">' +
+      '<span class="aname">' + name + '</span><span class="abadge">default</span>' + mod +
+      '<span class="adef">' + desc + '</span>' +
+      '<button class="abtn" onclick="editBuiltin(\'' + t + '\')">Modify</button></div>';
+  }).join('');
+  const cs = rules.map(r =>
+    '<div class="arow">' +
+    '<input type="checkbox" ' + (r.enabled===false?'':'checked') + ' onchange="setRuleEnabled(\'' + r.id + '\', this.checked)">' +
+    '<span class="aname">' + esc(r.name) + '</span>' +
+    '<span class="adef">' + esc(ruleSummary(r)) + '</span>' +
+    '<button class="abtn" onclick="editRule(\'' + r.id + '\')">Modify</button>' +
+    '<button class="abtn warn" onclick="delRule(\'' + r.id + '\')">Delete</button></div>').join('');
+  box.innerHTML = bi + cs;
+}
+function editBuiltin(t) {
+  const fields = BUILTIN_FIELDS[t] || [];
+  const f = document.getElementById('ruleform');
+  f.style.display = '';
+  f.innerHTML = '<div><b>Modify ' + ALERT_TYPES.find(x=>x[0]===t)[1] + '</b></div>' +
+    fields.map(([fld, label], i) =>
+      '<div style="margin-top:6px">' + label + ' \u2265 ' +
+      '<input id="bo_' + fld + '" style="width:80px" value="' +
+      ((builtinOverrides[t]||{})[fld] != null ? builtinOverrides[t][fld] : '') + '" placeholder="default"></div>').join('') +
+    '<div style="margin-top:8px">' +
+    '<button class="abtn" onclick="saveBuiltin(\'' + t + '\')">Save</button> ' +
+    '<button class="abtn" onclick="closeForm()">Cancel</button></div>';
+}
+function saveBuiltin(t) {
+  builtinOverrides[t] = builtinOverrides[t] || {};
+  (BUILTIN_FIELDS[t]||[]).forEach(([fld]) => {
+    const el = document.getElementById('bo_' + fld);
+    const v = parseFloat(el.value);
+    if (isNaN(v)) delete builtinOverrides[t][fld];
+    else builtinOverrides[t][fld] = v;
+  });
+  pushSettings(); closeForm(); renderAList();
+}
+function editRule(id) {
+  const r = rules.find(x => x.id === id); if (!r) return;
+  formConds = JSON.parse(JSON.stringify(r.conds || []));
+  editingId = id;
+  const f = document.getElementById('ruleform');
+  f.style.display = '';
+  renderRuleForm(r.name, r.level, r.match);
+}
+function closeForm() {
+  document.getElementById('ruleform').style.display = 'none';
+  formConds = []; editingId = null;
 }
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function setRuleEnabled(id, on) {
@@ -436,24 +498,27 @@ function setRuleEnabled(id, on) {
   r.enabled = on; pushSettings();
 }
 function delRule(id) {
-  rules = rules.filter(x => x.id !== id); pushSettings(); renderRules();
+  rules = rules.filter(x => x.id !== id); pushSettings(); renderAList();
 }
 // ---- rule form ----
 let formConds = [];
 function toggleRuleForm() {
   const f = document.getElementById('ruleform');
-  const show = f.style.display === 'none';
-  if (show && !formConds.length) formConds = [{field:'enroute_min', op:'gte', value:''}];
-  f.style.display = show ? '' : 'none';
-  renderRuleForm();
+  if (f.style.display === 'none') {
+    editingId = null;
+    if (!formConds.length) formConds = [{field:'enroute_min', op:'gte', value:''}];
+    f.style.display = '';
+    renderRuleForm();
+  } else closeForm();
 }
-function renderRuleForm() {
+function renderRuleForm(pname, plevel, pmatch) {
   const f = document.getElementById('ruleform');
   if (f.style.display === 'none') return;
   f.innerHTML =
-    '<div><input id="rname" placeholder="Alert name (e.g. ER too long)" style="width:240px"> ' +
-    '<select id="rlevel"><option value="urgent">urgent (toast)</option><option value="minor">minor</option></select>' +
-    ' <label class="sethint"><input type="checkbox" id="ranym"> match ANY condition (default: all)</label></div>' +
+    '<div><input id="rname" placeholder="Alert name (e.g. ER too long)" style="width:240px" value="' + esc(pname||'') + '"> ' +
+    '<select id="rlevel"><option value="urgent"' + (plevel==='urgent'?' selected':'') + '>urgent (toast)</option>' +
+    '<option value="minor"' + (plevel==='minor'?' selected':'') + '>minor</option></select>' +
+    ' <label class="sethint"><input type="checkbox" id="ranym"' + (pmatch==='any'?' checked':'') + '> match ANY condition (default: all)</label></div>' +
     formConds.map((c, i) =>
       '<div style="margin-top:4px">' +
       sel('rfield'+i, RULE_FIELDS, c.field) + ' ' +
@@ -488,13 +553,16 @@ function saveRule() {
   if (!name) { document.getElementById('setstatus').textContent = 'give the alert a name first'; return; }
   const conds = formConds.filter(c => String(c.value).trim() !== '');
   if (!conds.length) { document.getElementById('setstatus').textContent = 'at least one condition needs a value'; return; }
-  rules.push({ id: 'r' + Date.now(), name, enabled: true,
-               level: document.getElementById('rlevel').value,
-               match: document.getElementById('ranym').checked ? 'any' : 'all',
-               conds });
-  formConds = [];
-  document.getElementById('ruleform').style.display = 'none';
-  pushSettings(); renderRules();
+  const level = document.getElementById('rlevel').value;
+  const match = document.getElementById('ranym').checked ? 'any' : 'all';
+  if (editingId) {
+    const r = rules.find(x => x.id === editingId);
+    if (r) { r.name = name; r.conds = conds; r.level = level; r.match = match; }
+  } else {
+    rules.push({ id: 'r' + Date.now(), name, enabled: true, level, match, conds });
+  }
+  closeForm();
+  pushSettings(); renderAList();
 }
 function muteDriver() {
   const n = document.getElementById('drvsellist').value;
@@ -512,10 +580,12 @@ fetch('/settings').then(r => r.json()).then(j => {
   mutedDrivers = j.muted_drivers || [];
   rules = j.rules || [];
   disabledBuiltins = j.disabled_builtins || [];
+  builtinOverrides = j.builtin_overrides || {};
 }).catch(()=>{});
 setInterval(() => { fetch('/settings').then(r=>r.json()).then(j => {
   mutedTypes = j.muted_types || []; mutedDrivers = j.muted_drivers || [];
   rules = j.rules || []; disabledBuiltins = j.disabled_builtins || [];
+  builtinOverrides = j.builtin_overrides || {};
 }).catch(()=>{}); }, 15000);
 </script>
 </body>
