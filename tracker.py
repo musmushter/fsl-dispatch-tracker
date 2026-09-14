@@ -40,6 +40,27 @@ VERSION = "1.1"
 BASE = r"C:/Users/musta/fsl_tracker"
 STATE_FILE = BASE + r"/state.json"
 SETTINGS_FILE = BASE + r"/settings.json"
+# ---- per-account scoping ----
+# The community hosts multiple AAA teams (separate portal logins). All runtime
+# data is scoped by ACCOUNT_KEY = the service-territory id that dominates the
+# gantt payloads, so switching logins can't bleed calls between teams.
+ACCOUNT_KEY = None
+ACCOUNT_FILES = {}  # label -> path template
+
+def current_paths():
+    return account_paths(ACCOUNT_KEY)
+
+def account_paths(key):
+    """File paths for an account key: state_<key8>.json etc. Legacy (no key)
+    files keep their original names."""
+    k = (key or "")[:8] or ""
+    sfx = ("_" + k) if k else ""
+    return {
+        "state":   BASE + f"/state{sfx}.json",
+        "events":  BASE + f"/events{sfx}.jsonl",
+        "etas":    BASE + f"/etas{sfx}.json",
+        "settings":BASE + f"/settings{sfx}.json",
+    }
 EVENTS_FILE = BASE + r"/events.jsonl"
 
 # ---------------- alert customization ----------------
@@ -48,7 +69,8 @@ EVENTS_FILE = BASE + r"/events.jsonl"
 # are dropped from state.json AND never fire Windows toasts.
 DEFAULT_SETTINGS = {"muted_types": [], "muted_drivers": [],
                     "rules": [], "disabled_builtins": [],
-                    "builtin_overrides": {}}
+                    "builtin_overrides": {},
+                    "numeric_names_external": True}
 SETTINGS = dict(DEFAULT_SETTINGS)
 
 def load_settings():
@@ -60,7 +82,8 @@ def load_settings():
                     "muted_drivers": list(data.get("muted_drivers") or []),
                     "rules": list(data.get("rules") or []),
                     "disabled_builtins": list(data.get("disabled_builtins") or []),
-                    "builtin_overrides": dict(data.get("builtin_overrides") or {})}
+                    "builtin_overrides": dict(data.get("builtin_overrides") or {}),
+                    "numeric_names_external": bool(data.get("numeric_names_external", True))}
     except Exception:
         SETTINGS = dict(DEFAULT_SETTINGS)
 
@@ -340,6 +363,11 @@ class State:
         self.last_reload_ts = 0 # last time watchdog reloaded the console tab
         self.login_required = False
         self.etas = {}          # parent_or_sa_id -> {"low","high","posted","text"}
+        try:
+            with open(current_paths()["etas"], encoding="utf-8") as f:
+                self.etas = json.load(f)
+        except Exception:
+            pass
         self.eta_fetch = {}     # sa_id -> last autofetch attempt ts
         # enrichment via the WO lightbox (Contact/member name); the gantt and
         # SA feeds never carry a person name
@@ -359,6 +387,7 @@ class State:
 
     # ---------- data ingestion ----------
     def ingest_delta(self, res):
+        self.detect_account(res)
         self.last_data_ts = now_ms()
         lp = unwrap(res.get("updatedLivePositions")) or {}
         for rid, wrap in lp.items():
@@ -485,6 +514,7 @@ class State:
         self.last_full_ts = now_ms()
         self.login_required = False
         found = []
+        self.detect_account(res)
 
         def walk(x):
             if isinstance(x, dict):
@@ -506,14 +536,54 @@ class State:
         for svc in found:
             self.ingest_service(svc)
 
+    # ---------- account scoping ----------
+    TERR_RE = re.compile(r'"ServiceTerritoryId"\s*:\s*"(0Hh[0-9A-Za-z]{12,15})"')
+
+    def detect_account(self, raw):
+        """Derive the account key from the gantt payload's dominating territory
+        id. On change: swap data files, wipe in-memory state, reload settings."""
+        global ACCOUNT_KEY, SETTINGS
+        terrs = self.TERR_RE.findall(raw if isinstance(raw, str) else json.dumps(raw))
+        if not terrs:
+            return
+        counts = {}
+        for t in terrs:
+            counts[t] = counts.get(t, 0) + 1
+        key = max(counts, key=counts.get)
+        if key == ACCOUNT_KEY:
+            return
+        first = ACCOUNT_KEY is None
+        ACCOUNT_KEY = key
+        # close old events handle, open the scoped one
+        try:
+            self.events_fh.close()
+        except Exception:
+            pass
+        self.events_fh = open(current_paths()["events"], "a", encoding="utf-8")
+        # reset memory so nothing crosses accounts
+        self.services.clear()
+        self.drivers.clear()
+        self.alerts.clear()
+        self.etas.clear()
+        self.eta_fetch.clear()
+        self.driver_order.clear()
+        self.wo_cache.clear()
+        self.dropoff_cache.clear()
+        self.cleared_log_list = getattr(self, "cleared_log_list", [])
+        self.cleared_log_list.clear()
+        load_settings()
+        print(f"account: {key}{'  (first load)' if first else '  SWITCHED — state reset'}", flush=True)
+
     # ---------- derived view ----------
     def is_external(self, rec):
-        """Contractor resources ('198114 - Jamal Awawda') — not our drivers.
-        Also a blocklist of resource ids confirmed external (e.g. 'JAD (A)',
-        resource 174584: never on the dispatch Gantt, never streams GPS,
-        worked calls outside the user's territory)."""
+        """Contractor resources ('198114 - Jamal Awawda') — not our drivers ON THE
+        DEFAULT ACCOUNT. Teams that work WITH All American see those units named
+        '104416 - Curtis Kees'; per-account settings (numeric_names_external=false)
+        keep them on the board. Resource-id blocklist always applies."""
         if rec.get("resource_id") in EXTERNAL_RESOURCE_IDS:
             return True
+        if not SETTINGS.get("numeric_names_external", True):
+            return False
         return bool(EXTERNAL_NAME_RE.match(rec.get("resource_name") or ""))
 
     def cleared(self, rec):
@@ -933,6 +1003,7 @@ class State:
 
     def snapshot(self):
         now = now_ms()
+        snap_account = ACCOUNT_KEY
         alerts = self.compute_alerts()
         muted_types = set(SETTINGS.get("muted_types") or [])
         muted_drivers = {x.lower() for x in (SETTINGS.get("muted_drivers") or [])}
@@ -1057,6 +1128,7 @@ class State:
             "alerts": list(alerts.values()),
             "rows": rows,
             "cleared": self.cleared_log(),
+            "account_key": snap_account,
         }
 
 
@@ -1149,10 +1221,16 @@ async def run():
                     prev = state.etas.get(rec_id)
                     if not prev or eta["posted"] > prev["posted"]:
                         state.etas[rec_id] = eta
+                        try:
+                            with open(current_paths()["etas"], "w", encoding="utf-8") as f:
+                                json.dump(state.etas, f)
+                        except Exception:
+                            pass
                         state.log_event("eta", record_id=rec_id, text=eta["text"],
                                         low=eta["low"], high=eta["high"])
                 return
             try:
+                state.detect_account(body)  # raw body carries ServiceTerritoryId
                 obj = json.loads(body)
             except Exception:
                 return
@@ -1229,7 +1307,7 @@ async def run():
                 try:
                     snap = state.snapshot()
                     snap["login_required"] = state.login_required
-                    with open(STATE_FILE, "w", encoding="utf-8") as f:
+                    with open(current_paths()["state"], "w", encoding="utf-8") as f:
                         json.dump(snap, f, ensure_ascii=False, indent=1)
                 except Exception:
                     print("snapshot error:", traceback.format_exc()[:400], flush=True)
@@ -1597,13 +1675,28 @@ if __name__ == "__main__":
                 self.send_header("Location", "/dashboard.html")
                 self.end_headers()
                 return
+            if path == "/state.json":
+                # account-scoped state file (legacy name before first detection)
+                out = current_paths()["state"]
+                try:
+                    with open(out, encoding="utf-8") as f:
+                        data = f.read().encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                except Exception:
+                    self.send_error(404, "Not found")
+                return
             if path == "/settings":
                 # read-only view of mute prefs so any viewer's gear menu stays in sync
                 out = json.dumps({"muted_types": SETTINGS.get("muted_types", []),
                                   "muted_drivers": SETTINGS.get("muted_drivers", []),
                                   "rules": SETTINGS.get("rules", []),
                                   "disabled_builtins": SETTINGS.get("disabled_builtins", []),
-                                  "builtin_overrides": SETTINGS.get("builtin_overrides", {})}).encode()
+                                  "builtin_overrides": SETTINGS.get("builtin_overrides", {}),
+                                  "numeric_names_external": SETTINGS.get("numeric_names_external", True)}).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(out)))
@@ -1632,6 +1725,7 @@ if __name__ == "__main__":
                 SETTINGS["builtin_overrides"] = {k: dict(v) for k, v in
                                                  (body.get("builtin_overrides") or {}).items()
                                                  if isinstance(v, dict)}
+                SETTINGS["numeric_names_external"] = bool(body.get("numeric_names_external", True))
                 save_settings()
                 out = json.dumps({"ok": True}).encode()
                 self.send_response(200)

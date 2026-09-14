@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>FSL Tracker v2.7</title>
+<title>FSL Tracker v2.8</title>
 <style>
   :root { --fg:#e8e8e8; --bg:#14161a; --card:#1e2127; --border:#33373f;
           --red:#e5484d; --amber:#f5a623; --green:#46a758; --muted:#8b909c; }
@@ -111,7 +111,7 @@
 </style>
 </head>
 <body>
-<h1>FSL Dispatch Tracker <span style="color:#8b909c;font-size:11px">v2.7</span> <span id="conn" class="conn-bad">connecting</span>
+<h1>FSL Dispatch Tracker <span style="color:#8b909c;font-size:11px">v2.8</span> <span id="conn" class="conn-bad">connecting</span>
   <button id="bellbtn" class="repbtn" style="margin-left:auto" onclick="toggleAlerts()">🔔 Enable alerts</button>
   <button id="gearbtn" class="repbtn" style="margin-left:6px" onclick="toggleSettings()">⚙ Alerts</button>
 </h1>
@@ -120,6 +120,10 @@
   <h2>Alerts</h2>
   <div class="sethint">Disabled alerts are removed everywhere: no flag, no banner entry, no toast. Changes apply to every viewer of this dashboard within ~25 s.</div>
   <div id="alist"></div>
+  <div class="sethint" style="margin-top:10px">
+    <label style="white-space:normal"><input type="checkbox" id="numext" onchange="setNumExt(this.checked)">
+    Treat digit-prefixed names (e.g. "104416 - Curtis Kees") as external vendors</label> —
+    uncheck on accounts that work <b>with</b> All American.</div>
   <button class="abtn" style="margin-top:12px" onclick="toggleRuleForm()">＋ Add new alert</button>
   <div id="ruleform" style="display:none; margin-top:10px; border-top:1px solid var(--border); padding-top:10px"></div>
   <div id="setstatus" class="sethint"></div>
@@ -157,7 +161,8 @@ function render(s) {
   conn.className = ok ? 'conn-ok' : 'conn-bad';
   document.getElementById('meta').textContent =
     'Central ' + s.generated_central + ' | ' + s.rows.length + ' active drivers | updated ' +
-    new Date(s.generated_at).toLocaleTimeString();
+    new Date(s.generated_at).toLocaleTimeString() +
+    (s.account_key ? ' | acct ' + String(s.account_key).slice(0,8) : '');
   lastRows = s.rows || [];
   const al = document.getElementById('alerts');
   al.innerHTML = '';
@@ -373,7 +378,7 @@ const BUILTIN_FIELDS = {
   MEMBER_WAITING:   [['wait_min','In current status for (min)']],
 };
 let mutedTypes = [], mutedDrivers = [], rules = [], disabledBuiltins = [];
-let builtinOverrides = {}, editingId = null;
+let builtinOverrides = {}, editingId = null, numExt = true;
 
 const RULE_FIELDS = [
   ['status',        'Status'],
@@ -398,6 +403,7 @@ function toggleSettings() {
   if (show) { buildSettingsPanel(); }
 }
 function buildSettingsPanel() {
+  document.getElementById('numext').checked = numExt;
   renderAList();
   renderRuleForm();
   const sel = document.getElementById('drvsellist');
@@ -417,13 +423,15 @@ async function pushSettings() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ muted_types: mutedTypes, muted_drivers: mutedDrivers,
                              rules: rules, disabled_builtins: disabledBuiltins,
-                             builtin_overrides: builtinOverrides }) });
+                             builtin_overrides: builtinOverrides,
+                             numeric_names_external: numExt }) });
     const j = await r.json();
     document.getElementById('setstatus').textContent = j.ok ? 'saved ✓ (applies within ~25 s)' : 'save FAILED: ' + j.err;
   } catch(e) {
     document.getElementById('setstatus').textContent = 'save failed (offline?): ' + e;
   }
 }
+function setNumExt(v) { numExt = v; pushSettings(); }
 function setBuiltinEnabled(t, on) {
   if (on) disabledBuiltins = disabledBuiltins.filter(x => x !== t);
   else if (!disabledBuiltins.includes(t)) disabledBuiltins.push(t);
@@ -589,6 +597,7 @@ fetch('/settings').then(r => r.json()).then(j => {
   rules = j.rules || [];
   disabledBuiltins = j.disabled_builtins || [];
   builtinOverrides = j.builtin_overrides || {};
+  numExt = j.numeric_names_external !== false;
 }).catch(()=>{});
 setInterval(() => { fetch('/settings').then(r=>r.json()).then(j => {
   mutedTypes = j.muted_types || []; mutedDrivers = j.muted_drivers || [];

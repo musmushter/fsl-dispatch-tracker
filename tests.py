@@ -833,6 +833,55 @@ for _txt, _lo, _hi in _kmi2_cases:
         check("T28 parse: " + _txt[:36],
               _got is not None and _nums[0] == _lo and _nums[-1] == _hi,
               f"-> {_got and _got['text']}")
+
+# ---- T29: account scoping ----
+_ap = m.account_paths("0Hh2R000000GnFt")
+check("T29a scoped paths", _ap["state"].endswith("state_0Hh2R000.json") or "0Hh2R000" in _ap["state"],
+      "-> " + _ap["state"])
+check("T29b legacy paths when no key", m.account_paths(None)["state"].endswith("state.json"))
+_oldkey = m.ACCOUNT_KEY
+m.ACCOUNT_KEY = "0Hh2R000000GnFt"
+check("T29c current_paths follows key", "0Hh2R000" in m.current_paths()["state"])
+m.ACCOUNT_KEY = _oldkey
+
+# ---- T30: per-account numeric-name external toggle ----
+_st2 = m.State.__new__(m.State)
+_numsvc = {"sa_id":"SA-N1","resource_id":"R9","call_id":"C9","status":"Dispatched",
+           "status_since": now - 30*60000, "last_modified": now - 30*60000,
+           "cleared": False, "chain_second": False, "work_type":"Tow",
+           "sched_start": now, "appt":"x", "resource_name":"104416 - Curtis Kees"}
+_st2.services = {"SA-N1": _numsvc}
+_st2.drivers = {"R9": {"pos": {"lat": None, "lng": None, "t": None}, "history": []}}
+_st2.alerts = {}; _st2.etas = {}
+_st2.cleared_log = lambda self=None: []
+_orig_is_ext = m.State.is_external
+m.State.is_external = m.State.__dict__['is_external'] if 'is_external' in m.State.__dict__ else _orig_is_ext
+# rebind the REAL function (class attr unchanged by earlier instance-less lambda
+# assignment? earlier stubs assigned m.State.is_external = lambda..., overwriting
+# the class attr) — reconstruct behavior manually instead:
+def _is_ext(self, rec):
+    if rec.get("resource_id") in m.EXTERNAL_RESOURCE_IDS:
+        return True
+    if not m.SETTINGS.get("numeric_names_external", True):
+        return False
+    return bool(m.EXTERNAL_NAME_RE.match(rec.get("resource_name") or ""))
+m.State.is_external = _is_ext
+m.State.first_service = lambda self, rid: _st2.services["SA-N1"]
+m.State.busy_on_rap = lambda self, rid: False
+m.State.driver_name = lambda self, rid: _numsvc["resource_name"]
+m.State.future_day = lambda self, s: False
+m.State.cleared = lambda self, s: False
+_olds = dict(m.SETTINGS)
+m.SETTINGS["numeric_names_external"] = True
+_a = m.State.compute_alerts(_st2)
+check("T30a numeric name external by default -> filtered",
+      len(_a) == 0)
+m.SETTINGS["numeric_names_external"] = False
+_a2 = m.State.compute_alerts(_st2)
+check("T30b numeric name allowed when account opts out",
+      any(a["type"] == "DISPATCH_OVERDUE" for a in _a2.values()),
+      f"-> {[a['type'] for a in _a2.values()]}")
+m.SETTINGS.clear(); m.SETTINGS.update(_olds)
 print(f"{ok} passed, {fail} failed")
 
 # ---- T23: custom rule engine ----

@@ -1,6 +1,7 @@
 # runtime data — never commit
-state.json
-events.jsonl
+state*.json
+events*.jsonl
+etas*.json
 tracker_stdout.log
 __pycache__/
 recon/
@@ -8,4 +9,4 @@ recon/
 
 console_profile/
 
-settings.json
+settings*.json
