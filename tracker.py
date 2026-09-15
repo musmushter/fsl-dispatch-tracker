@@ -12,6 +12,7 @@ console itself already received.
 """
 import asyncio
 import datetime as dt
+import os
 from zoneinfo import ZoneInfo
 import json
 import math
@@ -37,7 +38,8 @@ except Exception:
 
 VERSION = "1.1"
 
-BASE = r"C:/Users/musta/fsl_tracker"
+# the tracker's folder = the folder THIS FILE lives in (portable across machines)
+BASE = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = BASE + r"/state.json"
 SETTINGS_FILE = BASE + r"/settings.json"
 # ---- per-account scoping ----
