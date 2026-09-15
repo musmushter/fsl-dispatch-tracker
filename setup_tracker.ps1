@@ -32,30 +32,35 @@ if ($PSVersionTable.Platform -eq "Unix") {
 
 # ---------- 1. Python ----------
 Say "Checking Python..."
+# Returns a hashtable: { exe = <full path or name>, arg = optional first arg }
 function Find-Python {
     # 1) py launcher (present even when python.exe is not on PATH)
-    $pyLauncher = Get-Command py -ErrorAction SilentlyContinue
+    $pyLauncher = Get-Command py.exe -ErrorAction SilentlyContinue
     if ($pyLauncher) {
-        $v = & py -3 --version 2>&1
-        if ($v -match "^Python 3") { return "py -3" }
+        $v = & $pyLauncher.Source -3 --version 2>&1
+        if ($v -match "^Python 3") {
+            return @{ exe = $pyLauncher.Source; arg = "-3" }
+        }
     }
     # 2) real python.exe on PATH — but NOT the Microsoft Store alias
     foreach ($c in @("python", "python3")) {
         $g = Get-Command $c -ErrorAction SilentlyContinue
         if ($g -and $g.Source -notlike "*WindowsApps*") {
             $v = & $g.Source --version 2>&1
-            if ($v -match "^Python 3") { return $g.Source }
+            if ($v -match "^Python 3") { return @{ exe = $g.Source; arg = $null } }
         }
     }
     # 3) per-user install dirs
     $cand = Get-ChildItem "$env:LOCALAPPDATA\Programs\Python" -Filter "python.exe" -Recurse -ErrorAction SilentlyContinue |
             Sort-Object FullName -Descending | Select-Object -First 1
-    if ($cand) { return $cand.FullName }
+    if ($cand) { return @{ exe = $cand.FullName; arg = $null } }
     return $null
 }
-$pythonExe = Find-Python
-$pyOK = ($null -ne $pythonExe)
-if ($pythonExe) { Write-Host "  found: $pythonExe" }
+$pyInfo = Find-Python
+$pyOK = ($null -ne $pyInfo)
+$pythonExe = if ($pyInfo) { $pyInfo.exe } else { $null }
+$pyArg     = if ($pyInfo) { $pyInfo.arg } else { $null }
+if ($pyInfo) { Write-Host "  found: $pythonExe $($pyArg)" }
 if (-not $pyOK) {
     Say "Installing Python 3.11 (this takes a few minutes)..."
     $installed = $false
@@ -81,9 +86,11 @@ if (-not $pyOK) {
     $env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")
     Write-Host "  Python installed."
 }
-$pythonExe = Find-Python
-if (-not $pythonExe) { Write-Host "No Python 3 found even after install - reboot once and re-run this script." -ForegroundColor Red; pause; exit 1 }
-Write-Host "  using: $pythonExe"
+$pyInfo = Find-Python
+if (-not $pyInfo) { Write-Host "No Python 3 found even after install - reboot once and re-run this script." -ForegroundColor Red; pause; exit 1 }
+$pythonExe = $pyInfo.exe
+$pyArg     = $pyInfo.arg
+Write-Host "  using: $pythonExe $($pyArg)"
 
 # ---------- 2. Chrome ----------
 Say "Checking Google Chrome..."
@@ -110,17 +117,19 @@ Write-Host "  found: $chrome"
 
 # ---------- 3. websockets ----------
 Say "Installing Python packages (websockets, tzdata)..."
-& $pythonExe.Trim('"') -m pip install --quiet websockets tzdata
+if ($pyArg) { & $pythonExe $pyArg -m pip install --quiet websockets tzdata }
+else        { & $pythonExe -m pip install --quiet websockets tzdata }
 if ($LASTEXITCODE -ne 0) { Write-Host "  pip install FAILED - send setup_log.txt back." -ForegroundColor Red; pause; exit 1 }
 Write-Host "  done."
 
 # ---------- 4. rewrite the .bat launchers for THIS machine ----------
 Say "Writing launchers for this machine..."
 $pyExe = $pythonExe.Trim('"')
+$pyArgs = if ($pyArg) { " $pyArg" } else { "" }
 $trackerBat = @"
 @echo off
 cd /d "$dir"
-start "" "$pyExe" tracker.py
+start "" "$pyExe"$pyArgs tracker.py
 "@
 Set-Content -Path "$dir\start_tracker.bat" -Value $trackerBat -Encoding ASCII
 
