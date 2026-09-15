@@ -135,7 +135,7 @@ Set-Content -Path "$dir\start_tracker.bat" -Value $trackerBat -Encoding ASCII
 
 $chromeBat = @"
 @echo off
-start "" "$chrome" --remote-debugging-port=9222 --user-data-dir="$dir\console_profile" "https://aaa-ace.my.site.com/ACEContractorCommunity/s/dispatch-console"
+start "" "$chrome" --remote-debugging-port=9222 --remote-allow-origins=* --user-data-dir="$dir\console_profile" "https://aaa-ace.my.site.com/ACEContractorCommunity/s/dispatch-console"
 "@
 Set-Content -Path "$dir\start_chrome.bat" -Value $chromeBat -Encoding ASCII
 Write-Host "  start_tracker.bat / start_chrome.bat updated."
@@ -146,7 +146,7 @@ $sm = [Environment]::GetFolderPath("Programs")
 $ws = New-Object -ComObject WScript.Shell
 $lnk = $ws.CreateShortcut("$sm\FSL Tracker Console.lnk")
 $lnk.TargetPath = $chrome
-$lnk.Arguments = "--remote-debugging-port=9222 --user-data-dir=`"$dir\console_profile`" `"https://aaa-ace.my.site.com/ACEContractorCommunity/s/dispatch-console`""
+$lnk.Arguments = "--remote-debugging-port=9222 --remote-allow-origins=* --user-data-dir=`"$dir\console_profile`" `"https://aaa-ace.my.site.com/ACEContractorCommunity/s/dispatch-console`""
 $lnk.WorkingDirectory = $dir
 $lnk.Save()
 $lnk = $ws.CreateShortcut("$sm\FSL Tracker.lnk")
@@ -157,7 +157,7 @@ Write-Host "  'FSL Tracker Console' + 'FSL Tracker' in the Start Menu."
 
 # ---------- 6. first run: open the console for login ----------
 Say "Opening the dispatch console for first login..."
-Start-Process $chrome -ArgumentList "--remote-debugging-port=9222", "--user-data-dir=`"$dir\console_profile`"", "https://aaa-ace.my.site.com/ACEContractorCommunity/s/dispatch-console"
+Start-Process $chrome -ArgumentList "--remote-debugging-port=9222", "--remote-allow-origins=*", "--user-data-dir=`"$dir\console_profile`"", "https://aaa-ace.my.site.com/ACEContractorCommunity/s/dispatch-console"
 
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Green

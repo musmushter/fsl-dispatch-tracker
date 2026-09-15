@@ -1221,6 +1221,9 @@ async def run():
         with urllib.request.urlopen("http://127.0.0.1:9222/json/version",
                                     timeout=5) as r:
             ws_url = json.load(r)["webSocketDebuggerUrl"]
+        # force 127.0.0.1: 'localhost' may resolve to ::1 where Chrome only
+        # listens on IPv4 -> endless reconnect loop
+        ws_url = re.sub(r"//localhost:", "//127.0.0.1:", ws_url)
     except Exception:
         print("=" * 60, flush=True)
         print("CANNOT REACH THE CONSOLE CHROME on port 9222.", flush=True)
@@ -1804,14 +1807,21 @@ if __name__ == "__main__":
         daemon_threads = True
 
     def serve():
-        with ThreadingTCPServer(("127.0.0.1", 8787), Handler) as httpd:
-            print(f"dashboard on http://127.0.0.1:8787/dashboard.html  (v{VERSION})", flush=True)
-            httpd.serve_forever()
+        while True:
+            try:
+                with ThreadingTCPServer(("127.0.0.1", 8787), Handler) as httpd:
+                    print(f"dashboard on http://127.0.0.1:8787/dashboard.html  (v{VERSION})", flush=True)
+                    httpd.serve_forever()
+            except OSError:
+                # another retry iteration (or an old instance) holds the port —
+                # retry after the stale one exits
+                time.sleep(5)
 
     threading.Thread(target=serve, daemon=True).start()
     while True:
         try:
             asyncio.run(run())
         except Exception:
-            print("reconnecting:", traceback.format_exc()[:300], flush=True)
+            tb = traceback.format_exc()
+            print("reconnecting: ..." + tb[-600:], flush=True)
             time.sleep(5)
