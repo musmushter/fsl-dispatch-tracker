@@ -970,6 +970,39 @@ _row3 = m.State.snapshot(_st5)["rows"][0]
 check("T33c range ETA keeps dash", _row3["eta"] and "\u2013" in _row3["eta"],
       "-> " + str(_row3["eta"]))
 m.SETTINGS.clear(); m.SETTINGS.update(_olds)
+
+# ---- T34: active-service feed backfill (In-Status drift fix) ----
+# simulate parse: the loop calls parse_status_times_from_feed(body) directly, so
+# test the selection logic + status_epoch end-to-end via feed_times dict.
+_st6 = m.State.__new__(m.State)
+_st6.services = {}; _st6.drivers = {}; _st6.alerts = {}; _st6.etas = {}
+_st6.eta_fetch = {}; _st6.driver_order = {}; _st6.wo_cache = {}; _st6.dropoff_cache = {}
+_st6.feed_times = {}; _st6.feed_time_fetch = {}
+_st6.cleared_log_list = []
+_st6.last_data_ts = now; _st6.last_full_ts = now; _st6.login_required = False
+_st6.events_fh = open(r'C:/Users/musta/AppData/Local/Temp/t34_events.jsonl','a')
+_act = {"sa_id":"SA-A9","resource_id":"R5","call_id":"C9","status":"Dispatched",
+        "status_since": now - 9*60000,   # seeded 9 min ago (wrong; real 25)
+        "last_modified": now - 9*60000,
+        "cleared": False, "cleared_at": None, "chain_second": False,
+        "work_type":"Tow", "sched_start": now, "appt":"x",
+        "status_history": [{"status":"Dispatched","t":now-9*60000,"source":"seed"}]}
+_st6.services["SA-A9"] = _act
+_st6.drivers["R5"] = {"pos": {"lat": None, "lng": None, "t": None}, "history": []}
+m.State.first_service = lambda self, rid: _st6.services["SA-A9"]
+m.State.busy_on_rap = lambda self, rid: False
+m.State.driver_name = lambda self, rid: "A9"
+m.State.is_external = lambda self, s: False
+m.State.future_day = lambda self, s: False
+m.State.cleared = lambda self, s: False
+# the loop would fetch the feed; simulate its RESULT: exact Dispatched 25 min ago
+_st6.feed_times["SA-A9"] = {"Dispatched": now - 25*60000}
+_e = m.State.status_epoch(_st6, _act)
+check("T34a status_epoch uses active-service feed time",
+      abs(_e - (now - 25*60000)) < 1000, f"-> {round((now-_e)/60000,1)} min")
+_row = m.State.snapshot(_st6)["rows"][0]
+check("T34b board shows exact In-Status", abs(_row["status_min"] - 25.0) < 0.5,
+      f"-> {_row['status_min']}")
 print(f"{ok} passed, {fail} failed")
 
 # ---- T23: custom rule engine ----

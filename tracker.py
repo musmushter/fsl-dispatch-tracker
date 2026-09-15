@@ -1082,7 +1082,7 @@ class State:
             dist_m = None
             if pos.get("lat") is not None and svc.get("lat") is not None:
                 dist_m = haversine_m(pos["lat"], pos["lng"], svc["lat"], svc["lng"])
-            since = svc.get("status_since") or svc.get("last_modified")
+            since = self.status_epoch(svc)
             # ETA from the newest feed comment (own feed or parent WO feed).
             # Stale ('*') = the post predates this service's current driver
             # being dispatched/en route: another team (or the previous
@@ -1584,15 +1584,12 @@ async def run():
                     # 2x/22s ≈ 330/h, drains a shift's backlog in ~45 min
                     for _pass in range(2):
                         job = None
-                        # newest first: the rows the user actually sees fill in first
-                        for s in sorted(state.services.values(),
-                                        key=lambda x: x.get("cleared_at") or 0,
-                                        reverse=True):
-                            if (not s.get("cleared_at")
-                                    or s["sa_id"] in state.feed_times
-                                    or s.get("sa_id") in state.feed_time_fetch):
+                        # 1) ACTIVE services whose status clock is a LastModified
+                        #    seed — their exact feed time fixes In-Status drift
+                        for s in state.services.values():
+                            if s["sa_id"] in state.feed_time_fetch:
                                 continue
-                            if now - s["cleared_at"] > 12 * 3600 * 1000:
+                            if s.get("cleared_at"):
                                 continue
                             if (s.get("call_type") or "").upper() == "RAP":
                                 continue
@@ -1601,8 +1598,37 @@ async def run():
                             if (now - state.feed_time_fetch.get(
                                     s["sa_id"], 0) < 600000):
                                 continue
+                            hist = s.get("status_history") or []
+                            observed = bool(hist) and \
+                                hist[-1].get("source") == "watch" and \
+                                hist[-1].get("status") == s.get("status")
+                            if observed:
+                                continue  # live-observed = already exact
+                            ft = state.feed_times.get(s["sa_id"]) or {}
+                            if ft.get(s.get("status")):
+                                continue  # already have the exact time
                             job = s
                             break
+                        # 2) cleared services (Callback backfill) — newest first
+                        if not job:
+                            for s in sorted(state.services.values(),
+                                            key=lambda x: x.get("cleared_at") or 0,
+                                            reverse=True):
+                                if (not s.get("cleared_at")
+                                        or s["sa_id"] in state.feed_times
+                                        or s.get("sa_id") in state.feed_time_fetch):
+                                    continue
+                                if now - s["cleared_at"] > 12 * 3600 * 1000:
+                                    continue
+                                if (s.get("call_type") or "").upper() == "RAP":
+                                    continue
+                                if state.is_external(s):
+                                    continue
+                                if (now - state.feed_time_fetch.get(
+                                        s["sa_id"], 0) < 600000):
+                                    continue
+                                job = s
+                                break
                         if not job:
                             break
                         state.feed_time_fetch[job["sa_id"]] = now
