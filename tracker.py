@@ -1094,9 +1094,19 @@ class State:
                 hi_c = dt.datetime.fromtimestamp(eta["high"] / 1000, ZONE)
                 same_day = lo_c.date() == now_c.date()
                 fmt = "%I:%M %p" if same_day else "%m/%d %I:%M %p"
-                eta_str = f"{lo_c.strftime(fmt)}–{hi_c.strftime('%I:%M %p').lstrip('0')}"
+                if eta["high"] - eta["low"] < 60000:
+                    # single-number ETA ('ETA 25 MIN') — one time, not 'X–X'
+                    eta_str = hi_c.strftime(fmt).lstrip("0")
+                else:
+                    eta_str = f"{lo_c.strftime(fmt)}–{hi_c.strftime('%I:%M %p').lstrip('0')}"
+                eta_passed_long = (now_c.timestamp() * 1000 - eta["high"]) > 45 * 60000
                 eta_stale = eta["posted"] < svc.get("status_since", 0) \
                     and status in ("Dispatched", "En Route")
+                if eta_passed_long and status in ("Dispatched", "En Route",
+                                                  "On Location", "Scheduled"):
+                    # window ended >45 min ago: no longer an ETA, just noise
+                    eta = None
+                    eta_str = None
             else:
                 eta_str, eta_stale = None, False
             # movement state, straight from GPS history (same rule as the

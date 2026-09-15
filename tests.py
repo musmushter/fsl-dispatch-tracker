@@ -929,6 +929,47 @@ check("T32c 2nd vote does not switch", m.ACCOUNT_KEY == "0Hh2R000000GnFtSAK")
 _st4.detect_account(_multi)
 check("T32d 3rd consecutive vote switches", m.ACCOUNT_KEY == OTHER)
 m.ACCOUNT_KEY = _oldkey if '_oldkey' in dir() else None
+
+# ---- T33: ETA display — single window + stale hiding ----
+import datetime as _dt
+_st5 = m.State.__new__(m.State)
+_st5.services = {}; _st5.drivers = {}; _st5.alerts = {}; _st5.etas = {}
+_st5.eta_fetch = {}; _st5.driver_order = {}; _st5.wo_cache = {}; _st5.dropoff_cache = {}
+_st5.feed_times = {}
+_st5.cleared_log_list = []
+_st5.last_data_ts = 0; _st5.last_full_ts = 0; _st5.login_required = False
+_st5.events_fh = open(r'C:/Users/musta/AppData/Local/Temp/t33_events.jsonl','a')
+_sv = {"sa_id":"SA-D1","resource_id":"R1","call_id":"C1","status":"Dispatched",
+       "status_since": now - 10*60000, "last_modified": now - 10*60000,
+       "cleared": False, "chain_second": False, "work_type":"Tow",
+       "sched_start": now, "appt":"x"}
+_st5.services["SA-D1"] = _sv
+_st5.drivers["R1"] = {"pos": {"lat": None, "lng": None, "t": None}, "history": []}
+m.State.first_service = lambda self, rid: _st5.services["SA-D1"]
+m.State.busy_on_rap = lambda self, rid: False
+m.State.driver_name = lambda self, rid: "D1"
+m.State.is_external = lambda self, s: False
+m.State.future_day = lambda self, s: False
+m.State.cleared = lambda self, s: False
+_olds = dict(m.SETTINGS); m.SETTINGS["disabled_builtins"]=[]; m.SETTINGS["rules"]=[]
+# single ETA 'ETA ==25 MIN' 10 min ago -> window is a single instant
+_st5.etas["SA-D1"] = {"low": now - 15*60000, "high": now - 15*60000,
+                      "posted": now - 40*60000, "text": "ETA ==25 MIN"}
+_row = m.State.snapshot(_st5)["rows"][0]
+check("T33a single ETA shows one time (no dash)", _row["eta"] and "-" not in _row["eta"],
+      "-> " + str(_row["eta"]))
+# ETA passed >45 min ago -> hidden
+_st5.etas["SA-D1"] = {"low": now - 80*60000, "high": now - 80*60000,
+                      "posted": now - 105*60000, "text": "ETA 25 MIN"}
+_row2 = m.State.snapshot(_st5)["rows"][0]
+check("T33b stale ETA hidden", _row2["eta"] is None and _row2["eta_low"] is None)
+# fresh range ETA still shows range
+_st5.etas["SA-D1"] = {"low": now + 5*60000, "high": now + 10*60000,
+                      "posted": now - 5*60000, "text": "ETA 15-20 MIN"}
+_row3 = m.State.snapshot(_st5)["rows"][0]
+check("T33c range ETA keeps dash", _row3["eta"] and "\u2013" in _row3["eta"],
+      "-> " + str(_row3["eta"]))
+m.SETTINGS.clear(); m.SETTINGS.update(_olds)
 print(f"{ok} passed, {fail} failed")
 
 # ---- T23: custom rule engine ----
