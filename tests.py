@@ -882,6 +882,53 @@ check("T30b numeric name allowed when account opts out",
       any(a["type"] == "DISPATCH_OVERDUE" for a in _a2.values()),
       f"-> {[a['type'] for a in _a2.values()]}")
 m.SETTINGS.clear(); m.SETTINGS.update(_olds)
+
+# ---- T31: status_epoch — exact feed time beats seeded LastModifiedDate ----
+_svcs = {"SA-E1": {"sa_id":"SA-E1","resource_id":"R1","status":"Dispatched",
+                    "status_since": now - 13*60000,      # stale seed (LM bumped)
+                    "last_modified": now - 13*60000,
+                    "status_history": [{"status":"Dispatched","t":now-13*60000,
+                                        "source":"seed"}]}}
+_st3 = m.State.__new__(m.State)
+_st3.services = _svcs
+_st3.feed_times = {"SA-E1": {"Dispatched": now - 24*60000}}
+_e = m.State.status_epoch(_st3, _svcs["SA-E1"])
+check("T31a feed time preferred", abs(_e - (now-24*60000)) < 1000,
+      f"-> {round((now-_e)/60000,1)} min")
+# live-observed flip still wins
+_svcs["SA-E1"]["status_history"] = [{"status":"Dispatched","t":now-6*60000,
+                                     "source":"watch"}]
+_svcs["SA-E1"]["status_since"] = now - 6*60000
+_e2 = m.State.status_epoch(_st3, _svcs["SA-E1"])
+check("T31b observed flip wins over feed", abs(_e2 - (now-6*60000)) < 1000)
+# no feed times -> falls back to seed
+_st3.feed_times = {}
+_e3 = m.State.status_epoch(_st3, _svcs["SA-E1"])
+check("T31c falls back to seed", abs(_e3 - (now-6*60000)) < 1000)
+
+# ---- T32: account switch needs 3 consecutive multi-service bulks ----
+_st4 = m.State.__new__(m.State)
+_st4.services = {}; _st4.drivers = {}; _st4.alerts = {}; _st4.etas = {}
+_st4.eta_fetch = {}; _st4.driver_order = {}; _st4.wo_cache = {}; _st4.dropoff_cache = {}
+_st4.cleared_log_list = []
+_st4._acct_cand_key = None; _st4._acct_cand_n = 0
+_st4.events_fh = open(r'C:/Users/musta/AppData/Local/Temp/t32_events.jsonl','a')
+m.ACCOUNT_KEY = "0Hh2R000000GnFtSAK"
+OTHER = "0Hh9R000000ZZZTest"
+_one = json.dumps({"ServiceTerritoryId": OTHER, "AppointmentNumber": "SA-1", "x":1})
+_st4.detect_account(_one)
+check("T32a single-lane load never switches", m.ACCOUNT_KEY == "0Hh2R000000GnFtSAK")
+_multi = json.dumps([
+  {"ServiceTerritoryId": OTHER, "AppointmentNumber": "SA-1"},
+  {"ServiceTerritoryId": OTHER, "AppointmentNumber": "SA-2"},
+  {"ServiceTerritoryId": OTHER, "AppointmentNumber": "SA-3"}])
+_st4.detect_account(_multi)
+check("T32b 1st multi vote does not switch", m.ACCOUNT_KEY == "0Hh2R000000GnFtSAK")
+_st4.detect_account(_multi)
+check("T32c 2nd vote does not switch", m.ACCOUNT_KEY == "0Hh2R000000GnFtSAK")
+_st4.detect_account(_multi)
+check("T32d 3rd consecutive vote switches", m.ACCOUNT_KEY == OTHER)
+m.ACCOUNT_KEY = _oldkey if '_oldkey' in dir() else None
 print(f"{ok} passed, {fail} failed")
 
 # ---- T23: custom rule engine ----

@@ -369,6 +369,8 @@ class State:
         except Exception:
             pass
         self.eta_fetch = {}     # sa_id -> last autofetch attempt ts
+        self._acct_cand_key = None
+        self._acct_cand_n = 0
         # enrichment via the WO lightbox (Contact/member name); the gantt and
         # SA feeds never carry a person name
         self.wo_cache = {}      # parent_id -> {"name":..., "benefit":..., fetched ts}
@@ -536,14 +538,39 @@ class State:
         for svc in found:
             self.ingest_service(svc)
 
+    # ---------- exact status timing ----------
+    def status_epoch(self, svc):
+        """Best-known start time of the service's CURRENT status.
+        Priority: live-observed flip > exact SA-feed post time > seeded
+        LastModifiedDate (Salesforce bumps it on ANY field change, so it can
+        read far too recent — Marcos' 24-min dispatch showed as 13)."""
+        status = svc.get("status")
+        hist = svc.get("status_history") or []
+        observed = bool(hist) and hist[-1].get("status") == status \
+            and hist[-1].get("source") == "watch"
+        if observed and svc.get("status_since"):
+            return svc["status_since"]
+        ft = (getattr(self, "feed_times", None) or {}).get(svc.get("sa_id")) or {}
+        if status and ft.get(status):
+            return ft[status]
+        if status == "Dispatched":
+            # a live-observed En Route flip implies Dispatched started before it;
+            # fall through to seed
+            pass
+        return svc.get("status_since") or svc.get("last_modified")
+
     # ---------- account scoping ----------
     TERR_RE = re.compile(r'"ServiceTerritoryId"\s*:\s*"(0Hh[0-9A-Za-z]{12,15})"')
 
     def detect_account(self, raw):
         """Derive the account key from the gantt payload's dominating territory
-        id. On change: swap data files, wipe in-memory state, reload settings."""
+        id. On change: swap data files, wipe in-memory state, reload settings.
+        Only FULL loads may switch accounts: single-resource getServices
+        responses (one lane, possibly another team's territory peeking into the
+        gantt) must never wipe the board mid-shift."""
         global ACCOUNT_KEY, SETTINGS
-        terrs = self.TERR_RE.findall(raw if isinstance(raw, str) else json.dumps(raw))
+        text = raw if isinstance(raw, str) else json.dumps(raw)
+        terrs = self.TERR_RE.findall(text)
         if not terrs:
             return
         counts = {}
@@ -552,6 +579,22 @@ class State:
         key = max(counts, key=counts.get)
         if key == ACCOUNT_KEY:
             return
+        # account switches only on MULTI-resource loads (initial ResourceCalendar
+        # / full-day gantt). A single-lane load is a peek, not a login switch.
+        if text.count('"AppointmentNumber"') < 2 and ACCOUNT_KEY is not None:
+            return
+        # and the new key must win 3 consecutive multi-service bulks before we
+        # wipe anything — a viewport-limited partial load must not nuke the board
+        if ACCOUNT_KEY is not None:
+            if key != self._acct_cand_key:
+                self._acct_cand_key = key
+                self._acct_cand_n = 1
+            else:
+                self._acct_cand_n += 1
+            if self._acct_cand_n < 3:
+                return
+        self._acct_cand_key = None
+        self._acct_cand_n = 0
         first = ACCOUNT_KEY is None
         ACCOUNT_KEY = key
         # close old events handle, open the scoped one
@@ -736,7 +779,7 @@ class State:
 
             # --- dispatch overdue ---
             if status == "Dispatched":
-                since = svc.get("status_since") or svc.get("last_modified") or now
+                since = self.status_epoch(svc) or now
                 mins = (now - since) / 60000
                 base["dispatch_min"] = round(mins, 1)
                 if mins >= builtin_threshold("DISPATCH_OVERDUE", "dispatch_min",
@@ -751,7 +794,7 @@ class State:
             # --- movement + standstill: EN ROUTE ONLY (on location / in tow
             # are expected to be stationary) ---
             if status == "En Route":
-                since = svc.get("status_since") or svc.get("last_modified") or now
+                since = self.status_epoch(svc) or now
                 enroute_min = (now - since) / 60000
                 base["enroute_min"] = round(enroute_min, 1)
                 base["dist_m"] = int(dist_m) if dist_m is not None else None
@@ -800,7 +843,7 @@ class State:
 
             # --- member waiting (Spotted) ---
             if status == "Spotted":
-                since = svc.get("status_since") or svc.get("last_modified") or now
+                since = self.status_epoch(svc) or now
                 mins = (now - since) / 60000
                 if mins >= builtin_threshold("MEMBER_WAITING", "wait_min",
                                              MEMBER_WAIT_MIN) \
