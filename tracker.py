@@ -373,6 +373,13 @@ class State:
         self.eta_fetch = {}     # sa_id -> last autofetch attempt ts
         self._acct_cand_key = None
         self._acct_cand_n = 0
+        self.rpc_ctx = None    # last apexremote ctx (csrf/vid) for self-serve RPCs
+        self.roster = {}       # rid -> {"name": ...} — persists across restarts
+        try:
+            with open(current_paths()["roster"], encoding="utf-8") as f:
+                self.roster = json.load(f)
+        except Exception:
+            pass
         # enrichment via the WO lightbox (Contact/member name); the gantt and
         # SA feeds never carry a person name
         self.wo_cache = {}      # parent_id -> {"name":..., "benefit":..., fetched ts}
@@ -474,6 +481,18 @@ class State:
             "reltype": svc.get("relationshipType"),
             "IsDeleted": f.get("IsDeleted", False),
         })
+
+        # roster: remember every resource id ever seen (survives restarts) so the
+        # gantt backfill loop can re-poll off-screen lanes
+        _rid = rec.get("resource_id")
+        if _rid and _rid not in self.roster:
+            self.roster[_rid] = {"name": coerce_name(svc.get("ResourceName")) or ""}
+            try:
+                with open(current_paths()["roster"], "w", encoding="utf-8") as f:
+                    json.dump(self.roster, f)
+            except Exception:
+                pass
+
         # bulk-seeded records (full-day load) can't observe live flips: derive
         # arrival/completion estimates from LastModifiedDate so the cleared
         # log still has usable timestamps
@@ -1322,6 +1341,12 @@ async def run():
                     "url": params["request"]["url"],
                     "method": params["request"]["method"],
                 }
+                pd = params["request"].get("postData") or ""
+                if "apexremote" in params["request"]["url"] and '"ctx"' in pd:
+                    try:
+                        state.rpc_ctx = json.loads(pd).get("ctx")
+                    except Exception:
+                        pass
                 # keep dict bounded
                 if len(req_meta) > 4000:
                     for k in list(req_meta)[:1500]:
@@ -1685,6 +1710,82 @@ async def run():
                         return False
             return False
 
+        async def gantt_backfill_loop():
+            """Lane-coverage backfill: the console only loads services for lanes
+            rendered in the gantt (virtualized). Resources scrolled out of view
+            never stream their services — Daniel Baker's new call was invisible
+            until his lane scrolled past. Every 45 s, re-fetch getServices for
+            known resources that currently have NO active service, so a fresh
+            assignment is picked up even when the lane is off-screen."""
+            while True:
+                await asyncio.sleep(45)
+                try:
+                    if (now_ms() - state.last_data_ts) / 1000 > 600:
+                        continue
+                    if not state.rpc_ctx:
+                        continue
+                    # date range: today .. +7d (matches console usage)
+                    now_c = dt.datetime.now(ZONE)
+                    d0 = now_c.strftime("%Y-%m-%dT00:00:00")
+                    d1 = (now_c + dt.timedelta(days=7)).strftime("%Y-%m-%dT00:00:00")
+                    active_rids = set()
+                    for s in state.services.values():
+                        if not state.cleared(s) and s.get("resource_id"):
+                            active_rids.add(s["resource_id"])
+                    todo = [rid for rid in state.roster
+                            if rid and rid not in active_rids]
+                    for rid in todo[:4]:   # 4 per cycle (~4/45s sweep)
+                        body = await fetch_rpc_getservices(rid, d0, d1)
+                        if body:
+                            state.ingest_bulk(body)
+                        await asyncio.sleep(2)
+                except Exception:
+                    print("gantt backfill error:", traceback.format_exc()[:300],
+                          flush=True)
+
+        async def fetch_rpc_getservices(rid, d0, d1):
+            """Fire FSL.ctrl079_ResourceCalendar.getServices via the console
+            tab's own session; returns the parsed result or None."""
+            try:
+                ctx = state.rpc_ctx or {}
+                payload = {"action": "FSL.ctrl079_ResourceCalendar",
+                           "method": "getServices",
+                           "data": [d0, d1, rid],
+                           "type": "rpc", "tid": 1,
+                           "ctx": ctx}
+                expr = ("(async () => { const r = await fetch("
+                        "'/ACEContractorCommunity/apexremote', {method:'POST',"
+                        "credentials:'include', headers:{'Content-Type':'application/json'},"
+                        "body: " + json.dumps(json.dumps(payload)) + "});"
+                        "return await r.text(); })()")
+                targets = json.loads(await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: urllib.request.urlopen(
+                        "http://127.0.0.1:9222/json/list", timeout=5).read()))
+                page = next((t for t in targets if t.get("type") == "page"
+                             and "dispatch-console" in t.get("url", "")), None)
+                if not page or "/login" in page.get("url", ""):
+                    return None
+                import websockets as _w
+                async with _w.connect(page["webSocketDebuggerUrl"],
+                                      max_size=20 * 1024 * 1024) as tws:
+                    await tws.send(json.dumps({"id": 7, "method": "Runtime.evaluate",
+                                               "params": {"expression": expr,
+                                                          "awaitPromise": True,
+                                                          "returnByValue": True}}))
+                    while True:
+                        m = json.loads(await asyncio.wait_for(tws.recv(), timeout=20))
+                        if m.get("id") != 7:
+                            continue
+                        val = (m.get("result", {}).get("result", {}) or {}).get("value")
+                        if not val:
+                            return None
+                        obj = json.loads(val)
+                        if isinstance(obj, list) and obj:
+                            return obj[0].get("result")
+                        return None
+            except Exception:
+                return None
+
         async def watchdog_loop():
             """Keeps the tracker's picture complete:
             - reload once shortly after startup if no full-day load arrived
@@ -1735,8 +1836,9 @@ async def run():
         wo_task = asyncio.create_task(wo_enrich_loop())
         ft_task = asyncio.create_task(feed_time_loop())
         do_task = asyncio.create_task(dropoff_loop())
+        gb_task = asyncio.create_task(gantt_backfill_loop())
         await asyncio.gather(reader_task, snap_task, wd_task, eta_task, wo_task,
-                             ft_task, do_task)
+                             ft_task, do_task, gb_task)
 
 
 if __name__ == "__main__":
