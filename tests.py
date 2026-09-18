@@ -829,10 +829,13 @@ for _txt, _lo, _hi in _kmi2_cases:
     if _lo is None:
         check("T28 no-match: " + _txt[:36], _got is None, f"-> {_got and _got['text']}")
     else:
+        # numbers from the matched text, ignoring the '2' of the 2ND prefix
         _nums = [int(x) for x in re.findall(r"\d+", _got["text"])] if _got else []
+        if _nums and _nums[0] == 2 and len(_nums) > 1:
+            _nums = _nums[1:]
         check("T28 parse: " + _txt[:36],
               _got is not None and _nums[0] == _lo and _nums[-1] == _hi,
-              f"-> {_got and _got['text']}")
+              f"-> {_got and _got['text']} lo={_got and round((_got['low']-_got['posted'])/60000)} hi={_got and round((_got['high']-_got['posted'])/60000)}")
 
 # ---- T29: account scoping ----
 _ap = m.account_paths("0Hh2R000000GnFt")
@@ -1003,6 +1006,35 @@ check("T34a status_epoch uses active-service feed time",
 _row = m.State.snapshot(_st6)["rows"][0]
 check("T34b board shows exact In-Status", abs(_row["status_min"] - 25.0) < 0.5,
       f"-> {_row['status_min']}")
+
+# ---- T35: natural-wording ETA patterns (scouted 09/15, All American acct) ----
+_eta35 = [
+    ("Called mbr she's leaving work now and she's 20 minutes out", 20, 20),
+    ("Mbr 30 minutes out", 30, 30),
+    ("DRIVER OL // MEMBER NOT READY // SAYS WILL BE ANOTHER 30 MIN WW", 30, 30),
+    ("20-25 minutes", 20, 25),
+    ("26 inbound miles 45 eta", 45, 45),
+    ("our driver will be there in 60-75 minutes or less", 60, 75),
+    ("2ND KMI ETA UPDT .. driver will be there in 60-75 minutes", 60, 75),
+    # negatives
+    ("MIF ETA VERI. LOC WW", None, None),
+    ("Rec ETA Request", None, None),
+    ("Member Callback @ 5:06 PM - ETA Update Request", None, None),
+    ("2ND KMI NO ANSWER TXT SENT", None, None),
+]
+def _p35(t):
+    _h = '<span class="feeditemtext"> ' + t + ' </span><span class="feeditemtext">Today at 3:00 PM</span>'
+    return m.parse_eta_from_feed(_h, now)
+for _t, _lo, _hi in _eta35:
+    _g = _p35(_t)
+    if _lo is None:
+        check("T35 no-match: " + _t[:36], _g is None, f"-> {_g and _g['text']}")
+    else:
+        _n = [int(x) for x in re.findall(r"\d+", _g["text"])] if _g else []
+        _n = [x for x in _n if not (_t.startswith("2ND") and x == 2)]
+        check("T35 parse: " + _t[:36],
+              _g is not None and _n[0] == _lo and _n[-1] == _hi,
+              f"-> {_g and _g['text']}")
 print(f"{ok} passed, {fail} failed")
 
 # ---- T23: custom rule engine ----

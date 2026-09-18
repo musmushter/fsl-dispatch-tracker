@@ -196,6 +196,13 @@ ETA_SINGLE_RE = re.compile(r"ETA[^0-9\n]{0,12}?(\d{1,3})\s*(?:m(?:in)?(?:s|utes?
 # Numbers need a time unit so call-IDs/random digits can't match.
 KMI2_RANGE_RE = re.compile(r"2\s*nd\s*kmi(?:(?!\d).){0,200}?(\d{1,3})\s*(?:[-–/]|to\b)\s*(\d{1,3})\s*(m(?:in)?(?:s|utes?)?)\b", re.I | re.S)
 KMI2_SINGLE_RE = re.compile(r"2\s*nd\s*kmi(?:(?!\d).){0,200}?(\d{1,3})\s*(m(?:in)?(?:s|utes?)?)\b", re.I | re.S)
+# natural-wording ETAs (scouted 09/15: "20 minutes out", "will be another 30 min",
+# bare "20-25 minutes" comments, "45 eta", "will be there in 60-75 minutes")
+OUT_RE = re.compile(r"\b(\d{1,3})\s*minutes?\s+out\b", re.I)
+ANOTHER_RE = re.compile(r"\banother\s+(\d{1,3})\s*(m(?:in)?(?:s|utes?)?)\b", re.I)
+BARE_RANGE_RE = re.compile(r"^\s*(\d{1,3})\s*[-–/]\s*(\d{1,3})\s*(m(?:in)?(?:s|utes?)?)\b", re.I)
+ETA_SUFFIX_RE = re.compile(r"\b(\d{1,3})\s*(?:m(?:in)?(?:s|utes?)?\s+)?eta\b", re.I)
+WILLBE_RE = re.compile(r"will\s+be\s+(?:there|arriving|on\s+scene)\s+in\s+(\d{1,3})(?:\s*(?:[-–/]|to\b)\s*(\d{1,3}))?\s*(m(?:in)?(?:s|utes?)?)\b", re.I)
 # external/contractor resources arrive as "198114 - Jamal Awawda" (bare
 # numeric prefix, no phone block) — user wants them off the tracker entirely
 EXTERNAL_NAME_RE = re.compile(r"^\d{3,}\s*[-–]\s*\S")
@@ -331,22 +338,29 @@ def parse_eta_from_feed(body, ref_epoch_ms):
             # 2ND KMI commitments carry the driver's renewed ETA without the
             # 'ETA n MIN' keyword ('...driver will be there in 60-75 minutes')
             em = KMI2_RANGE_RE.search(clean) or KMI2_SINGLE_RE.search(clean)
-            if not em:
-                continue
-            # KMI2 match spans from '2ND KMI' to the numbers; narrow to the
-            # numeric tail so lo/hi parse from the numbers, and the stored
-            # text stays clean
-            # narrow to the numbers, skipping the leading '2' of '2ND':
-            pairs = re.search(r"(\d{1,3})\s*(?:[-–/]|to\b)\s*(\d{1,3})", em.group(0))
-            if pairs:
-                em = pairs
-            else:
-                singles = list(re.finditer(r"(\d{1,3})", em.group(0)))
-                em = singles[-1] if singles else None
-                if em is None:
-                    continue
-        lo = int(em.group(1))
-        hi = int(em.group(2)) if em.lastindex and em.lastindex >= 2 else lo
+        if not em:
+            # natural-wording forms (scouted 09/15)
+            for pat in (OUT_RE, ANOTHER_RE, BARE_RANGE_RE, ETA_SUFFIX_RE,
+                        WILLBE_RE):
+                em = pat.search(clean)
+                if em:
+                    break
+        if not em:
+            continue
+        # KMI2/wording matches span extra context ('2ND KMI ... 60-75 minutes',
+        # '... 20 minutes out'); extract the numbers from the matched text
+        # directly — group indices differ per pattern and unit groups crash
+        # int() (e.g. group(2)='MIN')
+        nums = re.findall(r"(?<!\d)(\d{1,3})(?!\d)", em.group(0))
+        if not nums:
+            continue
+        if re.match(r"(?i)2\s*nd\s*kmi", em.group(0)) and len(nums) > 1 \
+                and nums[0] == "2":
+            nums = nums[1:]   # the '2' of '2ND' is not an ETA number
+        if len(nums) >= 2 and re.search(r"[-–/]|to\b", em.group(0)):
+            lo, hi = int(nums[0]), int(nums[1])
+        else:
+            lo = hi = int(nums[-1])
         # post time: first 'Today/Yesterday at H:MM' after the text block
         tm = FEED_TIME_RE.search(body, m.end(), m.end() + 4000)
         if not tm:
@@ -552,6 +566,11 @@ class State:
             "related": svc.get("relatedService1") or f.get("Related_Service__c"),
             "reltype": svc.get("relationshipType"),
             "IsDeleted": f.get("IsDeleted", False),
+            "territory": (f.get("ServiceTerritory.Name")
+                          or (unwrap(f.get("ServiceTerritory")) or {}).get("Name")
+                          or (svc.get("ServiceTerritory") or {}).get("Name")),
+            "territory_id": (f.get("ServiceTerritoryId")
+                             or (svc.get("ServiceTerritory") or {}).get("Id")),
         })
 
         # roster: remember every resource id ever seen (survives restarts) so the
@@ -1245,6 +1264,7 @@ class State:
                 "driver": self.driver_name(rid),
                 "resource_id": rid,
                 "sa_id": svc.get("sa_id"),
+                "group": (svc.get("territory") or "").strip(),
                 "call_id": svc.get("call_id"),
                 "appt": svc.get("appt"),
                 "work_type": svc.get("work_type"),
