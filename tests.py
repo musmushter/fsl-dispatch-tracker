@@ -915,6 +915,7 @@ _st4.services = {}; _st4.drivers = {}; _st4.alerts = {}; _st4.etas = {}
 _st4.eta_fetch = {}; _st4.driver_order = {}; _st4.wo_cache = {}; _st4.dropoff_cache = {}
 _st4.cleared_log_list = []
 _st4._acct_cand_key = None; _st4._acct_cand_n = 0
+_st4.terr_set = {"0Hh2R000000GnFtSAK"}   # current login's known territories
 _st4.events_fh = open(r'C:/Users/musta/AppData/Local/Temp/t32_events.jsonl','a')
 m.ACCOUNT_KEY = "0Hh2R000000GnFtSAK"
 OTHER = "0Hh9R000000ZZZTest"
@@ -926,11 +927,11 @@ _multi = json.dumps([
   {"ServiceTerritoryId": OTHER, "AppointmentNumber": "SA-2"},
   {"ServiceTerritoryId": OTHER, "AppointmentNumber": "SA-3"}])
 _st4.detect_account(_multi)
-check("T32b 1st multi vote does not switch", m.ACCOUNT_KEY == "0Hh2R000000GnFtSAK")
+check("T32b 1st disjoint multi vote does not switch", m.ACCOUNT_KEY == "0Hh2R000000GnFtSAK")
 _st4.detect_account(_multi)
-check("T32c 2nd vote does not switch", m.ACCOUNT_KEY == "0Hh2R000000GnFtSAK")
+check("T32c 2nd consecutive disjoint vote switches", m.ACCOUNT_KEY == OTHER[:15])
 _st4.detect_account(_multi)
-check("T32d 3rd consecutive vote switches", m.ACCOUNT_KEY == OTHER)
+check("T32d 3rd vote: still switched, stable", m.ACCOUNT_KEY == OTHER[:15])
 m.ACCOUNT_KEY = _oldkey if '_oldkey' in dir() else None
 
 # ---- T33: ETA display — single window + stale hiding ----
@@ -1035,6 +1036,36 @@ for _t, _lo, _hi in _eta35:
         check("T35 parse: " + _t[:36],
               _g is not None and _n[0] == _lo and _n[-1] == _hi,
               f"-> {_g and _g['text']}")
+
+# ---- T36: account detection via territory-set overlap ----
+_st7 = m.State.__new__(m.State)
+for a in ('services','drivers','alerts','etas','eta_fetch','driver_order',
+          'wo_cache','dropoff_cache','feed_times','feed_time_fetch'):
+    setattr(_st7, a, {})
+_st7.cleared_log_list = []
+_st7._acct_cand_key = None; _st7._acct_cand_n = 0; _st7.terr_set = set()
+_st7.last_data_ts = now; _st7.last_full_ts = now; _st7.login_required = False
+_st7.events_fh = open(r'C:/Users/musta/AppData/Local/Temp/t36_events.jsonl','a')
+_T1, _T2, _T3 = "0Hh2R000000000T1", "0Hh2R000000000T2", "0Hh2R000000000T3"
+_multi = lambda terrs: json.dumps([{"ServiceTerritoryId": t, "AppointmentNumber": "SA-%d" % i}
+                                   for i, t in enumerate(terrs)])
+m.State.detect_account(_st7, _multi([_T1, _T2]))
+check("T36a first load sets key", m.ACCOUNT_KEY == sorted([_T1,_T2])[0][:15])
+check("T36b terr_set holds both", _st7.terr_set == {_T1, _T2})
+# a bulk from a NEW territory that overlaps -> no switch, set grows
+m.State.detect_account(_st7, _multi([_T2, _T3]))
+check("T36c overlap -> same account", m.ACCOUNT_KEY == sorted([_T1,_T2])[0][:15])
+check("T36d new territory adopted", _T3 in _st7.terr_set)
+# disjoint set on 1 payload -> no switch; 2 consecutive -> switch
+_T9 = "0Hh2R000000000T9"
+_st7.services["x"] = {"call_id": "1"}   # pretend data exists
+m.State.detect_account(_st7, _multi([_T9, _T9, _T9]))
+check("T36e disjoint once -> no wipe", _st7.services.get("x") is not None)
+m.State.detect_account(_st7, _multi([_T9, _T9, _T9]))
+check("T36f disjoint twice -> real switch (wiped)", _st7.services.get("x") is None
+      and m.ACCOUNT_KEY == _T9[:15],
+      f"-> key={m.ACCOUNT_KEY} svc={_st7.services.get('x')}")
+m.ACCOUNT_KEY = _oldkey if '_oldkey' in dir() else m.ACCOUNT_KEY
 print(f"{ok} passed, {fail} failed")
 
 # ---- T23: custom rule engine ----

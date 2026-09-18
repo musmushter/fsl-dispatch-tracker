@@ -458,6 +458,7 @@ class State:
         self.eta_fetch = {}     # sa_id -> last autofetch attempt ts
         self._acct_cand_key = None
         self._acct_cand_n = 0
+        self.terr_set = set()
         self.rpc_ctx = None    # last apexremote ctx (csrf/vid) for self-serve RPCs
         self.kmi_cache = {}    # ("kmi", sa_id) -> (ts, messages)
         self.roster = {}       # rid -> {"name": ...} — persists across restarts
@@ -675,40 +676,45 @@ class State:
     TERR_RE = re.compile(r'"ServiceTerritoryId"\s*:\s*"(0Hh[0-9A-Za-z]{12,15})"')
 
     def detect_account(self, raw):
-        """Derive the account key from the gantt payload's dominating territory
-        id. On change: swap data files, wipe in-memory state, reload settings.
-        Only FULL loads may switch accounts: single-resource getServices
-        responses (one lane, possibly another team's territory peeking into the
-        gantt) must never wipe the board mid-shift."""
+        """Account = the LOGIN, not any single territory: a team's gantt spans
+        several territories (631252 HOUSTON EMERGENCY, 631268 ALL AMERICAN, ...),
+        and per-lane getServices payloads legitimately carry different ones. A
+        real account switch (different portal login) brings a COMPLETELY
+        disjoint territory set — only that may wipe state. New territories that
+        overlap the known set just join it."""
         global ACCOUNT_KEY, SETTINGS
         text = raw if isinstance(raw, str) else json.dumps(raw)
-        terrs = self.TERR_RE.findall(text)
+        terrs = set(self.TERR_RE.findall(text))
         if not terrs:
             return
-        counts = {}
-        for t in terrs:
-            counts[t] = counts.get(t, 0) + 1
-        key = max(counts, key=counts.get)
-        if key == ACCOUNT_KEY:
+        if not getattr(self, "terr_set", None):
+            self.terr_set = set()
+            self.terr_set = terrs
+            ACCOUNT_KEY = sorted(terrs)[0][:15]
             return
-        # account switches only on MULTI-resource loads (initial ResourceCalendar
-        # / full-day gantt). A single-lane load is a peek, not a login switch.
-        if text.count('"AppointmentNumber"') < 2 and ACCOUNT_KEY is not None:
+        if terrs & self.terr_set:
+            # overlap -> same account; adopt any new territories
+            new = terrs - self.terr_set
+            if new:
+                self.terr_set |= new
             return
-        # and the new key must win 3 consecutive multi-service bulks before we
-        # wipe anything — a viewport-limited partial load must not nuke the board
-        if ACCOUNT_KEY is not None:
-            if key != self._acct_cand_key:
-                self._acct_cand_key = key
-                self._acct_cand_n = 1
-            else:
-                self._acct_cand_n += 1
-            if self._acct_cand_n < 3:
-                return
-        self._acct_cand_key = None
-        self._acct_cand_n = 0
+        # completely disjoint: only then is this a different account. Require
+        # the disjoint set on 2 consecutive multi-service payloads (a stray
+        # cross-team lane must not wipe the board).
+        if text.count('"AppointmentNumber"') < 2:
+            return
+        cand_key = getattr(self, "_acct_cand_key", None)
+        cand_n = getattr(self, "_acct_cand_n", 0)
+        if cand_key == frozenset(terrs):
+            self._acct_cand_n = cand_n + 1
+        else:
+            self._acct_cand_key = frozenset(terrs)
+            self._acct_cand_n = 1
+        if self._acct_cand_n < 2:
+            return
         first = ACCOUNT_KEY is None
-        ACCOUNT_KEY = key
+        ACCOUNT_KEY = sorted(terrs)[0][:15]
+        self.terr_set = set(terrs)   # fresh account -> fresh territory set
         # close old events handle, open the scoped one
         try:
             self.events_fh.close()
@@ -727,7 +733,7 @@ class State:
         self.cleared_log_list = getattr(self, "cleared_log_list", [])
         self.cleared_log_list.clear()
         load_settings()
-        print(f"account: {key}{'  (first load)' if first else '  SWITCHED — state reset'}", flush=True)
+        print(f"account: {ACCOUNT_KEY}{'  (first load)' if first else '  SWITCHED — state reset'}", flush=True)
 
     # ---------- derived view ----------
     def is_external(self, rec):
