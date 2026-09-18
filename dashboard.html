@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>FSL Tracker v2.8</title>
+<title>FSL Tracker v2.9</title>
 <style>
   :root { --fg:#e8e8e8; --bg:#14161a; --card:#1e2127; --border:#33373f;
           --red:#e5484d; --amber:#f5a623; --green:#46a758; --muted:#8b909c; }
@@ -111,19 +111,33 @@
 </style>
 </head>
 <body>
-<h1>FSL Dispatch Tracker <span style="color:#8b909c;font-size:11px">v2.8</span> <span id="conn" class="conn-bad">connecting</span>
+<h1>FSL Dispatch Tracker <span style="color:#8b909c;font-size:11px">v2.9</span> <span id="conn" class="conn-bad">connecting</span>
   <button id="bellbtn" class="repbtn" style="margin-left:auto" onclick="toggleAlerts()">🔔 Enable alerts</button>
-  <button id="gearbtn" class="repbtn" style="margin-left:6px" onclick="toggleSettings()">⚙ Alerts</button>
+  <button id="gearbtn" class="repbtn" style="margin-left:6px" onclick="toggleSettings()">⚙ Settings</button>
 </h1>
+<div id="kmibackdrop" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:40" onclick="hideKmi()"></div>
+<div id="kmimodal" style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); z-index:41; width:min(520px,92vw); max-height:80vh; overflow-y:auto; background:var(--card); border:1px solid var(--border); border-radius:12px; padding:14px 18px; font-size:13px; box-shadow:0 12px 40px rgba(0,0,0,.5)">
+  <b id="kmititle">KMI / 2nd KMI messages</b>
+  <div id="kmibody" style="margin-top:8px"></div>
+  <button class="abtn" style="margin-top:10px" onclick="hideKmi()">Close</button>
+</div>
 <div id="settings-backdrop" onclick="toggleSettings()"></div>
 <div id="settings">
   <h2>Alerts</h2>
   <div class="sethint">Disabled alerts are removed everywhere: no flag, no banner entry, no toast. Changes apply to every viewer of this dashboard within ~25 s.</div>
   <div id="alist"></div>
-  <div class="sethint" style="margin-top:10px">
-    <label style="white-space:normal"><input type="checkbox" id="numext" onchange="setNumExt(this.checked)">
-    Treat digit-prefixed names (e.g. "104416 - Curtis Kees") as external vendors</label> —
-    uncheck on accounts that work <b>with</b> All American.</div>
+  <div class="arow" style="border-top:1px solid var(--border); margin-top:10px; padding-top:10px">
+    <input type="checkbox" id="numext" onchange="setNumExt(this.checked)">
+    <span class="aname">Vendor filter</span>
+    <span class="adef">Treat digit-prefixed names (e.g. "104416 - Curtis Kees") as external
+    vendors and hide them. Uncheck on accounts that work <b>with</b> All American.</span>
+  </div>
+  <div class="arow">
+    <input type="checkbox" id="kmishow" onchange="setKmiShow(this.checked)">
+    <span class="aname">KMI feed button</span>
+    <span class="adef">Adds a button under Report that opens the Work Order feed
+    messages containing "KMI" or "2nd", with their timestamps.</span>
+  </div>
   <button class="abtn" style="margin-top:12px" onclick="toggleRuleForm()">＋ Add new alert</button>
   <div id="ruleform" style="display:none; margin-top:10px; border-top:1px solid var(--border); padding-top:10px"></div>
   <div id="setstatus" class="sethint"></div>
@@ -210,7 +224,9 @@ function render(s) {
       '<td>' + (r.dist_km==null?'–':r.dist_km) + '</td>' +
       '<td>' + gpsAge + '</td>' +
       '<td>' + flags + '</td>' +
-      '<td><button class="repbtn">Report</button></td>';
+      '<td><button class="repbtn">Report</button>' +
+      '<button class="repbtn kmibtn" style="margin-top:3px;display:none" ' +
+      'title="KMI / 2nd KMI messages from the Work Order feed">KMI</button></td>';
     const rbtn = tr.querySelector('.repbtn');
     rbtn.rowData = {d:(r.driver||'').split('(')[0].trim(), c:r.call_id||'',
                     s:r.status||'', m:Math.round(r.status_min||0),
@@ -218,6 +234,9 @@ function render(s) {
                     mv:r.moving||'', mm:r.moving_min, km:r.dist_km,
                     cs:r.chain_second||false};
     rbtn.addEventListener('click', function() { copyReport(this, this.rowData); });
+    const kbtn = tr.querySelector('.kmibtn');
+    kbtn.rowData = {sa: r.sa_id || '', d: (r.driver||'').split('(')[0].trim(), c: r.call_id||''};
+    kbtn.addEventListener('click', function() { showKmi(this, this.rowData); });
     tb.appendChild(tr);
   });
   notifyLoop(s);
@@ -378,7 +397,7 @@ const BUILTIN_FIELDS = {
   MEMBER_WAITING:   [['wait_min','In current status for (min)']],
 };
 let mutedTypes = [], mutedDrivers = [], rules = [], disabledBuiltins = [];
-let builtinOverrides = {}, editingId = null, numExt = true;
+let builtinOverrides = {}, editingId = null, numExt = true, kmiShow = false;
 
 const RULE_FIELDS = [
   ['status',        'Status'],
@@ -404,7 +423,9 @@ function toggleSettings() {
 }
 function buildSettingsPanel() {
   document.getElementById('numext').checked = numExt;
+  document.getElementById('kmishow').checked = kmiShow;
   renderAList();
+  applyKmiButtons();
   renderRuleForm();
   const sel = document.getElementById('drvsellist');
   const names = (lastRows || []).map(r => (r.driver||'').split('(')[0].trim()).filter(Boolean);
@@ -424,7 +445,8 @@ async function pushSettings() {
       body: JSON.stringify({ muted_types: mutedTypes, muted_drivers: mutedDrivers,
                              rules: rules, disabled_builtins: disabledBuiltins,
                              builtin_overrides: builtinOverrides,
-                             numeric_names_external: numExt }) });
+                             numeric_names_external: numExt,
+                             kmi_show: kmiShow }) });
     const j = await r.json();
     document.getElementById('setstatus').textContent = j.ok ? 'saved ✓ (applies within ~25 s)' : 'save FAILED: ' + j.err;
   } catch(e) {
@@ -432,6 +454,36 @@ async function pushSettings() {
   }
 }
 function setNumExt(v) { numExt = v; pushSettings(); }
+function hideKmi() {
+  document.getElementById('kmimodal').style.display = 'none';
+  document.getElementById('kmibackdrop').style.display = 'none';
+}
+async function showKmi(btn, rd) {
+  document.getElementById('kmititle').textContent =
+    'KMI / 2nd KMI — ' + rd.d + ' (call ' + rd.c + ')';
+  const body = document.getElementById('kmibody');
+  body.innerHTML = '<span style="color:var(--muted)">loading feed...</span>';
+  document.getElementById('kmimodal').style.display = '';
+  document.getElementById('kmibackdrop').style.display = '';
+  try {
+    const r = await fetch('/kmi?sa_id=' + encodeURIComponent(rd.sa));
+    const j = await r.json();
+    if (!j.messages || !j.messages.length) {
+      body.innerHTML = '<span style="color:var(--muted)">No KMI / 2nd KMI messages in this Work Order feed.</span>';
+      return;
+    }
+    body.innerHTML = j.messages.map(m =>
+      '<div style="margin-top:6px; padding:6px 8px; border:1px solid var(--border); border-radius:6px">' +
+      '<div style="color:var(--muted); font-size:11px">' + esc(m.ts || 'time unknown') + '</div>' +
+      '<div>' + esc(m.text) + '</div></div>').join('');
+  } catch(e) {
+    body.innerHTML = '<span style="color:var(--red)">failed to load: ' + esc(String(e)) + '</span>';
+  }
+}
+function setKmiShow(v) { kmiShow = v; pushSettings(); applyKmiButtons(); }
+function applyKmiButtons() {
+  document.querySelectorAll('#rows .kmibtn').forEach(b => b.style.display = kmiShow ? '' : 'none');
+}
 function setBuiltinEnabled(t, on) {
   if (on) disabledBuiltins = disabledBuiltins.filter(x => x !== t);
   else if (!disabledBuiltins.includes(t)) disabledBuiltins.push(t);
@@ -598,11 +650,14 @@ fetch('/settings').then(r => r.json()).then(j => {
   disabledBuiltins = j.disabled_builtins || [];
   builtinOverrides = j.builtin_overrides || {};
   numExt = j.numeric_names_external !== false;
+  kmiShow = !!j.kmi_show;
+  applyKmiButtons();
 }).catch(()=>{});
 setInterval(() => { fetch('/settings').then(r=>r.json()).then(j => {
   mutedTypes = j.muted_types || []; mutedDrivers = j.muted_drivers || [];
   rules = j.rules || []; disabledBuiltins = j.disabled_builtins || [];
   builtinOverrides = j.builtin_overrides || {};
+  kmiShow = !!j.kmi_show; applyKmiButtons();
 }).catch(()=>{}); }, 15000);
 </script>
 </body>

@@ -48,6 +48,7 @@ SETTINGS_FILE = BASE + r"/settings.json"
 # gantt payloads, so switching logins can't bleed calls between teams.
 ACCOUNT_KEY = None
 ACCOUNT_FILES = {}  # label -> path template
+STATE_REF = None  # set by run(); used by HTTP endpoints
 
 def current_paths():
     return account_paths(ACCOUNT_KEY)
@@ -72,7 +73,8 @@ EVENTS_FILE = BASE + r"/events.jsonl"
 DEFAULT_SETTINGS = {"muted_types": [], "muted_drivers": [],
                     "rules": [], "disabled_builtins": [],
                     "builtin_overrides": {},
-                    "numeric_names_external": True}
+                    "numeric_names_external": True,
+                    "kmi_show": False}
 SETTINGS = dict(DEFAULT_SETTINGS)
 
 def load_settings():
@@ -85,7 +87,8 @@ def load_settings():
                     "rules": list(data.get("rules") or []),
                     "disabled_builtins": list(data.get("disabled_builtins") or []),
                     "builtin_overrides": dict(data.get("builtin_overrides") or {}),
-                    "numeric_names_external": bool(data.get("numeric_names_external", True))}
+                    "numeric_names_external": bool(data.get("numeric_names_external", True)),
+                    "kmi_show": bool(data.get("kmi_show", False))}
     except Exception:
         SETTINGS = dict(DEFAULT_SETTINGS)
 
@@ -240,6 +243,74 @@ def parse_status_times_from_feed(body):
     return out, reassigned
 
 
+# ---------------- page-context fetch (module level, for HTTP-thread use) ----
+def fetch_page_text(url_path, timeout=25):
+    """Fetch a relative console URL through the console tab's own session.
+    Blocking; safe to call from the HTTP server thread."""
+    import websockets as _w
+    targets = json.loads(urllib.request.urlopen(
+        "http://127.0.0.1:9222/json/list", timeout=5).read())
+    page = next((t for t in targets if t.get("type") == "page"
+                 and "dispatch-console" in t.get("url", "")), None)
+    if not page or "/login" in page.get("url", ""):
+        return None
+
+    async def _run():
+        async with _w.connect(page["webSocketDebuggerUrl"],
+                              max_size=20 * 1024 * 1024) as tws:
+            expr = ("(async () => { const r = await fetch(" + json.dumps(url_path) +
+                    ", {credentials:'include'}); return await r.text(); })()")
+            await tws.send(json.dumps({"id": 1, "method": "Runtime.evaluate",
+                                       "params": {"expression": expr,
+                                                  "awaitPromise": True,
+                                                  "returnByValue": True}}))
+            while True:
+                m = json.loads(await asyncio.wait_for(tws.recv(), timeout=timeout))
+                if m.get("id") == 1:
+                    return (m.get("result", {}).get("result", {}) or {}).get("value")
+    return asyncio.run(_run())
+
+# ---------------- KMI feed messages ----------------
+KMI_RE = re.compile(r"\bKMI\b|\b2nd\b", re.I)
+
+def parse_kmi_messages(wo_body, sa_body=None):
+    """Work Order feed comments containing KMI or 2nd. The WO feed carries the
+    comments but not their post times; the SA feed for the same call has
+    timestamps on its posts. When a KMI message's text matches an SA-feed post,
+    borrow that exact time. Returns newest last (feed order)."""
+    # SA feed: text -> exact epoch (newest post per identical text)
+    sa_times = {}
+    if sa_body:
+        for m in FEED_TEXT_RE.finditer(sa_body):
+            clean = re.sub(r"<[^>]+>", " ", m.group(1))
+            clean = clean.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+            clean = " ".join(clean.split())
+            if not clean:
+                continue
+            tm = FEED_TIME_RE.search(sa_body, m.end(), m.end() + 4000)
+            if tm:
+                try:
+                    sa_times[clean] = feed_post_epoch(tm)
+                except Exception:
+                    pass
+    out = []
+    for m in FEED_TEXT_RE.finditer(wo_body):
+        clean = re.sub(r"<[^>]+>", " ", m.group(1))
+        clean = clean.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+        clean = " ".join(clean.split())
+        if not clean or not KMI_RE.search(clean):
+            continue
+        ts_text, epoch = None, None
+        if clean in sa_times:
+            epoch = sa_times[clean]
+            try:
+                c = dt.datetime.fromtimestamp(epoch / 1000, ZONE)
+                ts_text = c.strftime("%m/%d %I:%M %p").lstrip("0")
+            except Exception:
+                ts_text = None
+        out.append({"ts": ts_text, "epoch": epoch, "text": clean[:300]})
+    return out
+
 def eta_ok(body):
     """Quick check: does this feed HTML contain any ETA comment?
     Works on raw HTML (tag-stripped first so entities/attributes don't matter)."""
@@ -374,6 +445,7 @@ class State:
         self._acct_cand_key = None
         self._acct_cand_n = 0
         self.rpc_ctx = None    # last apexremote ctx (csrf/vid) for self-serve RPCs
+        self.kmi_cache = {}    # ("kmi", sa_id) -> (ts, messages)
         self.roster = {}       # rid -> {"name": ...} — persists across restarts
         try:
             with open(current_paths()["roster"], encoding="utf-8") as f:
@@ -1232,6 +1304,7 @@ $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
 # ---------------- CDP listener ----------------
 async def run():
     state = State()
+    globals()["STATE_REF"] = state
     last_snapshot = 0
     msg_id = 0
     pending = {}
@@ -1875,6 +1948,48 @@ if __name__ == "__main__":
                 except Exception:
                     self.send_error(404, "Not found")
                 return
+            if path.startswith("/kmi"):
+                from urllib.parse import urlparse, parse_qs
+                q = parse_qs(urlparse(self.path).query)
+                sa_id = (q.get("sa_id") or [""])[0]
+                if not sa_id:
+                    self.send_error(400, "sa_id required"); return
+                svc = STATE_REF.services.get(sa_id) or {}
+                wo = svc.get("parent_id")
+                if not wo:
+                    out = json.dumps({"messages": [], "err": "no work order"}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(out)))
+                    self.end_headers()
+                    self.wfile.write(out)
+                    return
+                key = ("kmi", sa_id)
+                cached = STATE_REF.kmi_cache.get(key)
+                if cached and now_ms() - cached[0] < 120000:
+                    msgs = cached[1]
+                else:
+                    try:
+                        body = fetch_page_text(
+                            "/ACEContractorCommunity/apex/"
+                            "fsl__vf0996_workorderchatter?id=" + wo)
+                    except Exception:
+                        body = None
+                    try:
+                        sa_body = fetch_page_text(
+                            "/ACEContractorCommunity/apex/"
+                            "fsl__vf0993_servicechatter?id=" + sa_id)
+                    except Exception:
+                        sa_body = None
+                    msgs = parse_kmi_messages(body, sa_body) if body else []
+                    STATE_REF.kmi_cache[key] = (now_ms(), msgs)
+                out = json.dumps({"messages": msgs}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+                return
             if path == "/settings":
                 # read-only view of mute prefs so any viewer's gear menu stays in sync
                 out = json.dumps({"muted_types": SETTINGS.get("muted_types", []),
@@ -1882,7 +1997,8 @@ if __name__ == "__main__":
                                   "rules": SETTINGS.get("rules", []),
                                   "disabled_builtins": SETTINGS.get("disabled_builtins", []),
                                   "builtin_overrides": SETTINGS.get("builtin_overrides", {}),
-                                  "numeric_names_external": SETTINGS.get("numeric_names_external", True)}).encode()
+                                  "numeric_names_external": SETTINGS.get("numeric_names_external", True),
+                                  "kmi_show": SETTINGS.get("kmi_show", False)}).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(out)))
@@ -1912,6 +2028,7 @@ if __name__ == "__main__":
                                                  (body.get("builtin_overrides") or {}).items()
                                                  if isinstance(v, dict)}
                 SETTINGS["numeric_names_external"] = bool(body.get("numeric_names_external", True))
+                SETTINGS["kmi_show"] = bool(body.get("kmi_show", False))
                 save_settings()
                 out = json.dumps({"ok": True}).encode()
                 self.send_response(200)
