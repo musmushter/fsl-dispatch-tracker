@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>FSL Tracker v2.9</title>
+<title>FSL Tracker v3.0</title>
 <style>
   :root { --fg:#e8e8e8; --bg:#14161a; --card:#1e2127; --border:#33373f;
           --red:#e5484d; --amber:#f5a623; --green:#46a758; --muted:#8b909c; }
@@ -114,7 +114,7 @@ tr.groupheader td { background: rgba(255,255,255,.06); color: var(--fg);
 </style>
 </head>
 <body>
-<h1>FSL Dispatch Tracker <span style="color:#8b909c;font-size:11px">v2.9</span> <span id="conn" class="conn-bad">connecting</span>
+<h1>FSL Dispatch Tracker <span style="color:#8b909c;font-size:11px">v3.0</span> <span id="conn" class="conn-bad">connecting</span>
   <button id="bellbtn" class="repbtn" style="margin-left:auto" onclick="toggleAlerts()">🔔 Enable alerts</button>
   <button id="gearbtn" class="repbtn" style="margin-left:6px" onclick="toggleSettings()">⚙ Settings</button>
 </h1>
@@ -191,19 +191,53 @@ function render(s) {
   });
   const tb = document.getElementById('rows');
   tb.innerHTML = '';
-  let lastGroup = null;
+  // bucket rows by territory (first-appearance order), one header per group
+  const groups = [];
+  const byGroup = {};
   (s.rows||[]).forEach(r => {
-    const grp = (r.group||'').trim();
-    if (grp && grp !== lastGroup) {
-      lastGroup = grp;
+    const g = (r.group||'').trim() || '\u0000nogroup';
+    if (!(g in byGroup)) { byGroup[g] = []; groups.push(g); }
+    byGroup[g].push(r);
+  });
+  groups.forEach(g => {
+    if (g !== '\u0000nogroup') {
       const gh = document.createElement('tr');
       gh.className = 'groupheader';
-      gh.innerHTML = '<td colspan="13">' + esc(grp) + '</td>';
+      gh.innerHTML = '<td colspan="13">' + esc(g) + '</td>';
       tb.appendChild(gh);
-    } else if (!grp && lastGroup !== null) {
-      lastGroup = null;
     }
+    byGroup[g].forEach(r => {
+      emitRow(r, tb);
+    });
+  });
+notifyLoop(s);
+  const cl = document.getElementById('cleared');
+  cl.innerHTML = '';
+  const shown = (s.cleared||[]).slice(0, window.clearedLimit || 20);
+  shown.forEach(c => {
+    const driver = (c.driver||'–').split('(')[0].trim();
     const tr = document.createElement('tr');
+    if (c.canceled) tr.className = 'canceled';
+    tr.innerHTML =
+      '<td>' + (c.cleared_at||'') + '</td>' +
+      '<td><b>' + (c.call_id||'') + '</b></td>' +
+      '<td>' + (c.member_name||'–') + '</td>' +
+      '<td>' + (c.phone||'–') + '</td>' +
+      '<td>' + (c.benefit||'–') + '</td>' +
+      '<td>' + (c.work_type||'–') + '</td>' +
+      '<td>' + (c.vehicle||'–') + '</td>' +
+      '<td>' + driver + '</td>' +
+      '<td>' + (c.wait_min==null ? '–' : fmtMin(c.wait_min)) + '</td>' +
+      '<td>' + (c.onscene_min==null ? '–' : fmtMin(c.onscene_min)) + '</td>' +
+      '<td>' + (c.canceled ? '<span class="flag r">CANCELED</span>' : '') + '</td>';
+    cl.appendChild(tr);
+  });
+  document.getElementById('loadmore').style.display =
+    (s.cleared||[]).length > shown.length ? '' : 'none';
+}
+
+function emitRow(r, tb) {
+const tr = document.createElement('tr');
     const urgent = (r.alerts||[]).some(t => t!=='MEMBER_WAITING');
     const warn = (r.alerts||[]).includes('MEMBER_WAITING');
     if (urgent) tr.className = 'alarm'; else if (warn) tr.className = 'warn';
@@ -252,32 +286,8 @@ function render(s) {
     kbtn.rowData = {sa: r.sa_id || '', d: (r.driver||'').split('(')[0].trim(), c: r.call_id||''};
     kbtn.addEventListener('click', function() { showKmi(this, this.rowData); });
     tb.appendChild(tr);
-  });
-  notifyLoop(s);
-  const cl = document.getElementById('cleared');
-  cl.innerHTML = '';
-  const shown = (s.cleared||[]).slice(0, window.clearedLimit || 20);
-  shown.forEach(c => {
-    const driver = (c.driver||'–').split('(')[0].trim();
-    const tr = document.createElement('tr');
-    if (c.canceled) tr.className = 'canceled';
-    tr.innerHTML =
-      '<td>' + (c.cleared_at||'') + '</td>' +
-      '<td><b>' + (c.call_id||'') + '</b></td>' +
-      '<td>' + (c.member_name||'–') + '</td>' +
-      '<td>' + (c.phone||'–') + '</td>' +
-      '<td>' + (c.benefit||'–') + '</td>' +
-      '<td>' + (c.work_type||'–') + '</td>' +
-      '<td>' + (c.vehicle||'–') + '</td>' +
-      '<td>' + driver + '</td>' +
-      '<td>' + (c.wait_min==null ? '–' : fmtMin(c.wait_min)) + '</td>' +
-      '<td>' + (c.onscene_min==null ? '–' : fmtMin(c.onscene_min)) + '</td>' +
-      '<td>' + (c.canceled ? '<span class="flag r">CANCELED</span>' : '') + '</td>';
-    cl.appendChild(tr);
-  });
-  document.getElementById('loadmore').style.display =
-    (s.cleared||[]).length > shown.length ? '' : 'none';
 }
+
 window.clearedLimit = 20;
 function loadMore() { window.clearedLimit += 20; poll(); }
 // ---- report ----
