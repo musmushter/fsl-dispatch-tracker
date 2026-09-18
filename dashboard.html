@@ -225,8 +225,8 @@ function render(s) {
       '<td>' + gpsAge + '</td>' +
       '<td>' + flags + '</td>' +
       '<td><button class="repbtn">Report</button>' +
-      '<button class="repbtn kmibtn" style="margin-top:3px;display:none" ' +
-      'title="KMI / 2nd KMI messages from the Work Order feed">KMI</button></td>';
+      '<button class="repbtn kmibtn"' + (kmiShow ? '' : ' style="display:none"') +
+      ' title="KMI / 2nd KMI messages from the Work Order feed">KMI</button></td>';
     const rbtn = tr.querySelector('.repbtn');
     rbtn.rowData = {d:(r.driver||'').split('(')[0].trim(), c:r.call_id||'',
                     s:r.status||'', m:Math.round(r.status_min||0),
