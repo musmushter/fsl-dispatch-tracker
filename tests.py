@@ -1066,6 +1066,36 @@ check("T36f disjoint twice -> real switch (wiped)", _st7.services.get("x") is No
       and m.ACCOUNT_KEY == _T9[:15],
       f"-> key={m.ACCOUNT_KEY} svc={_st7.services.get('x')}")
 m.ACCOUNT_KEY = _oldkey if '_oldkey' in dir() else m.ACCOUNT_KEY
+
+# ---- T37: re-dispatch picks the LAST Dispatched post ----
+_st8 = m.State.__new__(m.State)
+for a in ('services','drivers','alerts','etas','eta_fetch','driver_order',
+          'wo_cache','dropoff_cache','feed_times','feed_time_fetch'):
+    setattr(_st8, a, {})
+_st8.cleared_log_list = []
+_st8.last_data_ts = now; _st8.last_full_ts = now; _st8.login_required = False
+_st8.events_fh = open(r'C:/Users/musta/AppData/Local/Temp/t37_events.jsonl','a')
+_sv37 = {"sa_id":"SA-RD","resource_id":"R7","call_id":"C7","status":"Dispatched",
+         "status_since": now - 34*60000,   # live-observed first dispatch
+         "last_modified": now - 34*60000,
+         "cleared": False, "chain_second": False, "work_type":"Tow",
+         "sched_start": now, "appt":"x",
+         "status_history": [{"status":"Dispatched","t":now-34*60000,"source":"watch"}]}
+_st8.services["SA-RD"] = _sv37
+m.State.driver_name = lambda self, rid: "D7"
+# feed has a NEWER dispatch post (3 min ago): Spotted -> Dispatched
+_st8.feed_times["SA-RD"] = {"Dispatched": now - 3*60000}
+_e = m.State.status_epoch(_st8, _sv37)
+check("T37a newer feed dispatch beats older observed", abs(_e - (now-3*60000)) < 1000,
+      f"-> {round((now-_e)/60000,1)} min")
+# feed OLDER than observed -> keep observed (don't go backwards)
+_st8.feed_times["SA-RD"] = {"Dispatched": now - 40*60000}
+_e2 = m.State.status_epoch(_st8, _sv37)
+check("T37b older feed keeps observed", abs(_e2 - (now-34*60000)) < 1000)
+# no feed -> observed
+del _st8.feed_times["SA-RD"]
+_e3 = m.State.status_epoch(_st8, _sv37)
+check("T37c no feed keeps observed", abs(_e3 - (now-34*60000)) < 1000)
 print(f"{ok} passed, {fail} failed")
 
 # ---- T23: custom rule engine ----

@@ -661,11 +661,19 @@ class State:
         hist = svc.get("status_history") or []
         observed = bool(hist) and hist[-1].get("status") == status \
             and hist[-1].get("source") == "watch"
-        if observed and svc.get("status_since"):
-            return svc["status_since"]
         ft = (getattr(self, "feed_times", None) or {}).get(svc.get("sa_id")) or {}
-        if status and ft.get(status):
-            return ft[status]
+        feed_t = ft.get(status)
+        observed = bool(hist) and hist[-1].get("status") == status \
+            and hist[-1].get("source") == "watch"
+        if observed and svc.get("status_since"):
+            # prefer a NEWER exact feed post over the live observation: a missed
+            # delta (Spotted -> Dispatched re-dispatch) leaves the observed time
+            # older than the truth (Loville: 34 min shown, 3 min real)
+            if feed_t and feed_t > svc["status_since"]:
+                return feed_t
+            return svc["status_since"]
+        if status and feed_t:
+            return feed_t
         if status == "Dispatched":
             # a live-observed En Route flip implies Dispatched started before it;
             # fall through to seed
@@ -1834,9 +1842,36 @@ async def run():
                     todo = [rid for rid in state.roster
                             if rid and rid not in active_rids]
                     for rid in todo[:4]:   # 4 per cycle (~4/45s sweep)
+                        before = set(state.services)
                         body = await fetch_rpc_getservices(rid, d0, d1)
                         if body:
                             state.ingest_bulk(body)
+                            # services freshly seeded by this bulk: fetch their
+                            # SA feeds NOW so In-Status starts exact, not from
+                            # the LastModifiedDate guess (Loville showed 34 min
+                            # when the last dispatch was 3 min old)
+                            for s in state.services.values():
+                                if (s.get("sa_id") in state.feed_times
+                                        or s.get("cleared_at")
+                                        or (s.get("call_type") or "").upper() == "RAP"
+                                        or state.is_external(s)
+                                        or s.get("sa_id") in state.feed_time_fetch):
+                                    continue
+                                state.feed_time_fetch[s["sa_id"]] = now_ms()
+                                fbody = await fetch_feed_via_page(
+                                    "/ACEContractorCommunity/apex/"
+                                    "fsl__vf0993_servicechatter?id=" + s["sa_id"])
+                                if fbody:
+                                    ft, _reassign = parse_status_times_from_feed(fbody)
+                                    if ft:
+                                        state.feed_times[s["sa_id"]] = ft
+                                        state.log_event("feed_times",
+                                                        sa_id=s["sa_id"],
+                                                        call_id=s.get("call_id"),
+                                                        sched=ft.get("Scheduled"),
+                                                        onsite=ft.get("On Location"),
+                                                        cleared=ft.get("Cleared"),
+                                                        reassigned=_reassign)
                         await asyncio.sleep(2)
                 except Exception:
                     print("gantt backfill error:", traceback.format_exc()[:300],
