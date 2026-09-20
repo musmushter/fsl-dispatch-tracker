@@ -1894,8 +1894,17 @@ async def run():
             - reload if data goes stale entirely;
             - toast when the session expires."""
             start_ts = now_ms()
+            last_forced = now_ms()
             while True:
                 await asyncio.sleep(30)
+                # hourly forced console reload — resets Salesforce's inactivity
+                # timer so the 'Are you still here?' popup never disconnects the
+                # session mid-shift
+                if now_ms() - last_forced >= 3600 * 1000:
+                    last_forced = now_ms()
+                    state.log_event("watchdog_hourly_reload")
+                    await reload_console()
+                    continue
                 try:
                     if state.login_required:
                         fire_toast({"type": "LOGIN NEEDED",
