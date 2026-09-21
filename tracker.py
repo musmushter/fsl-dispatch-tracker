@@ -1244,8 +1244,18 @@ class State:
             move_since = None
             hist = d.get("history") or []
             if status in ("En Route", "Dispatched"):
+                # AT the service location dominates everything else: a driver
+                # parked on the pin is AT LOC even if GPS history spans the
+                # drive over (Fernando: arrived 30s ago, span still covered
+                # the road) — and it doesn't need 3 fresh pings either.
+                if (dist_m is not None
+                        and dist_m <= AT_LOCATION_RADIUS_M
+                        and pos.get("t")
+                        and now - pos["t"] <= GPS_STALE_MIN * 60000):
+                    move_state = "AT LOC"
+                    move_since = pos.get("t")
                 recent = [h for h in hist if now - h["t"] <= STANDSTILL_MIN * 60000 * 1.2]
-                if len(recent) >= 3:
+                if move_state is None and len(recent) >= 3:
                     span = max(haversine_m(a["lat"], a["lng"], b["lat"], b["lng"])
                                for a in recent for b in recent)
                     if span <= STANDSTILL_RADIUS_M:
@@ -1271,7 +1281,7 @@ class State:
                             move_state = "STANDSTILL"
                     else:
                         move_state = "MOVING"
-                else:
+                elif move_state is None:
                     # too few fresh pings to judge
                     move_state = None
             rows.append({

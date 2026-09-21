@@ -1096,6 +1096,64 @@ check("T37b older feed keeps observed", abs(_e2 - (now-34*60000)) < 1000)
 del _st8.feed_times["SA-RD"]
 _e3 = m.State.status_epoch(_st8, _sv37)
 check("T37c no feed keeps observed", abs(_e3 - (now-34*60000)) < 1000)
+
+# ---- T38: AT LOC dominance — proximity overrides movement history ----
+_st9 = m.State.__new__(m.State)
+for a in ('services','drivers','alerts','etas','eta_fetch','driver_order',
+          'wo_cache','dropoff_cache','feed_times','feed_time_fetch'):
+    setattr(_st9, a, {})
+_st9.cleared_log_list = []
+_st9.last_data_ts = now; _st9.last_full_ts = now; _st9.login_required = False
+_st9.events_fh = open(r'C:/Users/musta/AppData/Local/Temp/t38_events.jsonl','a')
+m.State.driver_name = lambda self, rid: "F"
+m.State.busy_on_rap = lambda self, rid: False
+m.State.future_day = lambda self, s: False
+m.State.cleared = lambda self, s: False
+m.State._mate_of = lambda self, s: None
+m.State.is_external = lambda self, s: False
+m.State.first_service = lambda self, rid: _st9.services["SA-F1"]
+m.State.dropoff_cache = {}
+# service at (29.76, -95.40); driver pos AT the service (dist ~0) with FRESH ping;
+# history includes road pings 10-12 min ago spanning >150 m (the drive over)
+import math as _math
+def _mk(svc_status, dist):
+    _sv = {"sa_id":"SA-F1","resource_id":"R1","call_id":"C1","status":svc_status,
+           "status_since": now - 30*60000, "last_modified": now - 30*60000,
+           "cleared": False, "chain_second": False, "work_type":"Tow",
+           "sched_start": now, "appt":"x",
+           "lat": 29.76, "lng": -95.40}
+    _st9.services = {"SA-F1": _sv}
+    _st9.drivers = {"R1": {"pos": None, "history": []}}
+    lat = 29.76; lng = -95.40 + dist / 111320.0 / _math.cos(_math.radians(29.76))
+    _st9.drivers["R1"]["pos"] = {"lat": lat, "lng": lng, "t": now - 30000}
+    # pings cluster at the CURRENT pos (parked); at dist=0 the cluster sits on
+    # the service pin and the two older pings span the "drive over" >150 m
+    if dist == 0:
+        _st9.drivers["R1"]["history"] = [
+            {"lat": 29.76, "lng": -95.40 + 0.005, "t": now - 11*60000},
+            {"lat": 29.76, "lng": -95.40 + 0.002, "t": now - 10*60000},
+            {"lat": lat, "lng": lng, "t": now - 30000}]
+    else:
+        _st9.drivers["R1"]["history"] = [
+            {"lat": lat, "lng": lng + 0.0005, "t": now - 11*60000},
+            {"lat": lat, "lng": lng + 0.0002, "t": now - 10*60000},
+            {"lat": lat, "lng": lng, "t": now - 30000}]
+    return _sv
+# En Route + at location + history covering the drive -> AT LOC (was MOVING)
+_sv = _mk("En Route", 0)
+_row = m.State.snapshot(_st9)["rows"][0]
+check("T38a En Route + at location -> AT LOC (was MOVING)",
+      _row["moving"] == "AT LOC", f"-> {_row['moving']}")
+# Dispatched + at location -> AT LOC too
+_sv = _mk("Dispatched", 0)
+_row = m.State.snapshot(_st9)["rows"][0]
+check("T38b Dispatched + at location -> AT LOC",
+      _row["moving"] == "AT LOC", f"-> {_row['moving']}")
+# En Route + 2 km away + still pings -> STANDSTILL (unchanged behavior)
+_sv = _mk("En Route", 2000)
+_row = m.State.snapshot(_st9)["rows"][0]
+check("T38c far + still -> STANDSTILL unchanged",
+      _row["moving"] == "STANDSTILL", f"-> {_row['moving']}")
 print(f"{ok} passed, {fail} failed")
 
 # ---- T23: custom rule engine ----
