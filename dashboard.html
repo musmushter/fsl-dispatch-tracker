@@ -254,7 +254,7 @@ const tr = document.createElement('tr');
       (r.gps_age_min > 10 ? '<span class="stale">' + r.gps_age_min + 'm</span>' :
        '<span class="ok">' + r.gps_age_min + 'm</span>');
     tr.innerHTML =
-      '<td>' + (r.driver||'').split('(')[0] + '</td>' +
+      '<td title="' + (r.driver_phones||[]).join('   ') + '">' + (r.driver||'').split('(')[0] + '</td>' +
       '<td><b>' + (r.call_id||'') + '</b>' + (r.chain_second ? ' <span class="mv mv-still" title="Second leg of a tow pair — its Dispatched status is stale bookkeeping">2nd</span>' : '') + '</td>' +
       '<td>' + (r.work_type||'') + '</td>' +
       '<td><span class="st ' + stCls + '">' + (r.status||'') + '</span></td>' +

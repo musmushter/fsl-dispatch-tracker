@@ -208,6 +208,26 @@ WILLBE_RE = re.compile(r"will\s+be\s+(?:there|arriving|on\s+scene)\s+in\s+(\d{1,
 EXTERNAL_NAME_RE = re.compile(r"^\d{3,}\s*[-–]\s*\S")
 # confirmed-external resource ids (kept off the board regardless of name shape)
 EXTERNAL_RESOURCE_IDS = {"174584"}
+# driver phone numbers: ResourceName strings embed them, e.g.
+#   "Jessica Miranda (3) **818 210 8302**713 478 8925"
+#   "Rojae Marcel(49)   713 384 3954(199309 )"
+#   "Thaer Zakarneh (19) 832 954 5002 (133177)"
+# — pull every 10-digit block out for the hover tooltip on the driver name.
+PHONE_RE = re.compile(r"(?<!\d)\(?\d{3}\)?[\s.*\-]*\d{3}[\s.*\-]*\d{4}(?!\d)")
+
+
+def parse_phones(name):
+    """Extract 10-digit phone blocks from a resource-name string, pretty-printed."""
+    out, seen = [], set()
+    for m in PHONE_RE.finditer(str(name or "")):
+        digits = re.sub(r"\D", "", m.group(0))
+        if len(digits) != 10:
+            continue
+        pretty = "(%s) %s-%s" % (digits[:3], digits[3:6], digits[6:])
+        if pretty not in seen:
+            seen.add(pretty)
+            out.append(pretty)
+    return out
 FEED_TEXT_RE = re.compile(r'class="feeditemtext[^"]*"[^>]*>(.*?)</span>', re.S)
 FEED_TIME_RE = re.compile(r"(Today|Yesterday) at (\d{1,2}):(\d{2})\s*([AP]M)", re.I)
 # SA feed status changes: 'changed Status from Scheduled to Dispatched.'
@@ -567,6 +587,8 @@ class State:
             "related": svc.get("relatedService1") or f.get("Related_Service__c"),
             "reltype": svc.get("relationshipType"),
             "IsDeleted": f.get("IsDeleted", False),
+            "phones": parse_phones(coerce_name(svc.get("ResourceName"))
+                                   or coerce_name(f.get("Service_Resource__r"))),
             "territory": (f.get("ServiceTerritory.Name")
                           or (unwrap(f.get("ServiceTerritory")) or {}).get("Name")
                           or (svc.get("ServiceTerritory") or {}).get("Name")),
@@ -577,8 +599,13 @@ class State:
         # roster: remember every resource id ever seen (survives restarts) so the
         # gantt backfill loop can re-poll off-screen lanes
         _rid = rec.get("resource_id")
-        if _rid and _rid not in self.roster:
-            self.roster[_rid] = {"name": coerce_name(svc.get("ResourceName")) or ""}
+        if _rid:
+            _ph = parse_phones(coerce_name(svc.get("ResourceName")))
+            if _rid not in self.roster:
+                self.roster[_rid] = {"name": coerce_name(svc.get("ResourceName")) or "",
+                                     "phones": _ph}
+            elif _ph and self.roster[_rid].get("phones") != _ph:
+                self.roster[_rid]["phones"] = _ph
             try:
                 with open(current_paths()["roster"], "w", encoding="utf-8") as f:
                     json.dump(self.roster, f)
@@ -619,6 +646,8 @@ class State:
         if rec["resource_id"] and rec.get("resource_name"):
             d = self.drivers.setdefault(rec["resource_id"], {"name": None, "pos": None, "history": []})
             d["name"] = rec["resource_name"]
+            if rec.get("phones"):
+                d["phones"] = rec["phones"]
         # trim status history
         rec["status_history"] = rec["status_history"][-50:]
         self.services[sa_id] = rec
@@ -866,6 +895,23 @@ class State:
             if s.get("resource_id") == rid and s.get("resource_name"):
                 return s["resource_name"]
         return rid
+
+    def driver_phones(self, rid):
+        """Phone numbers parsed out of this driver's ResourceName, most
+        authoritative source first: live driver state -> roster (persists
+        across restarts) -> any service currently naming this resource."""
+        d = self.drivers.get(rid)
+        if d and d.get("phones"):
+            return d["phones"]
+        r = (getattr(self, "roster", None) or {}).get(rid)
+        if r and r.get("phones"):
+            return r["phones"]
+        for s in self.services.values():
+            if s.get("resource_id") == rid and s.get("resource_name"):
+                ph = parse_phones(s["resource_name"])
+                if ph:
+                    return ph
+        return []
 
     def compute_alerts(self):
         now = now_ms()
@@ -1286,6 +1332,7 @@ class State:
                     move_state = None
             rows.append({
                 "driver": self.driver_name(rid),
+                "driver_phones": self.driver_phones(rid),
                 "resource_id": rid,
                 "sa_id": svc.get("sa_id"),
                 "group": (svc.get("territory") or "").strip(),
