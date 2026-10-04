@@ -48,11 +48,24 @@ if curl -s --max-time 2 "http://127.0.0.1:$PORT/json/version" >/dev/null 2>&1; t
 fi
 
 mkdir -p "$PROFILE"
+LOG="$PWD/console_chrome.log"
+: > "$LOG"
+
 # --remote-allow-origins=* is REQUIRED on Chrome 111+ or the CDP websocket
 # refuses to connect while /json/version still answers (silent reconnect loop).
-nohup "$CHROME" --remote-debugging-port=$PORT "--remote-allow-origins=*" \
+# --disable-features=Vulkan: this box carries a broken Vulkan implicit layer
+# (VkLayer_LSFGVK_frame_generation -> liblsfg-vk-layer.so) that the GPU process
+# cannot initialise against, which leaves the window created but unrendered.
+# Chrome never needs Vulkan for the console, so skip it entirely.
+# Output goes to $LOG — a silent launcher makes a window failure undiagnosable.
+nohup "$CHROME" \
+    --remote-debugging-port=$PORT "--remote-allow-origins=*" \
     --user-data-dir="$PROFILE" --no-first-run --no-default-browser-check \
-    "$URL" >/dev/null 2>&1 &
+    --ozone-platform-hint=auto \
+    --disable-features=Vulkan \
+    "$URL" >>"$LOG" 2>&1 &
+CHROME_PID=$!
+echo "chrome pid $CHROME_PID   (log: $LOG)"
 
 # ---- wait for the port and SAY SO (a first-run dialog can stall launch) ----
 for i in $(seq 1 30); do
@@ -66,6 +79,9 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
+echo
+echo "--- last lines of $LOG ---"
+tail -15 "$LOG" 2>/dev/null
 fail "debug port $PORT never came up within 30s." \
     "Close every chrome/chromium window and run this again." \
     "A Chrome already running WITHOUT the debug flag swallows the new launch."
