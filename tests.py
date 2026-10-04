@@ -11,6 +11,12 @@ m = importlib.util.module_from_spec(spec)
 sys.modules['tracker'] = m
 spec.loader.exec_module(m)
 
+# The suite exercises compute_alerts with synthetic services, and the alert
+# engine fires real desktop toasts — so a plain test run spams the user's
+# notification centre with fixture alerts (D22/D21b/P3, call 555xxx). Stub the
+# notifier out: tests assert on alert OBJECTS, never on the toast itself.
+m.fire_toast = lambda *a, **k: None
+
 CH = ZoneInfo("America/Chicago")
 now = int(time.time() * 1000)
 ok = fail = 0

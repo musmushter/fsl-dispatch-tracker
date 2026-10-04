@@ -63,6 +63,7 @@ nohup "$CHROME" \
     --user-data-dir="$PROFILE" --no-first-run --no-default-browser-check \
     --ozone-platform-hint=auto \
     --disable-features=Vulkan \
+    --disable-infobars \
     "$URL" >>"$LOG" 2>&1 &
 CHROME_PID=$!
 echo "chrome pid $CHROME_PID   (log: $LOG)"
