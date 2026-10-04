@@ -1,8 +1,12 @@
 """Regression tests for tracker alert logic + SF time encoding + ETA parser."""
-import json, time, importlib.util, sys, datetime as dt, re
+import json, time, importlib.util, sys, datetime as dt, re, os, tempfile
 from zoneinfo import ZoneInfo
 
-spec = importlib.util.spec_from_file_location('tracker', r'C:/Users/musta/fsl_tracker/tracker.py')
+# derive paths from THIS file's location — works on any machine (Windows dev
+# box resolves to the identical directory, Linux to ~/fsl_tracker)
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_TMP = tempfile.gettempdir()
+spec = importlib.util.spec_from_file_location('tracker', os.path.join(_HERE, 'tracker.py'))
 m = importlib.util.module_from_spec(spec)
 sys.modules['tracker'] = m
 spec.loader.exec_module(m)
@@ -916,7 +920,7 @@ _st4.eta_fetch = {}; _st4.driver_order = {}; _st4.wo_cache = {}; _st4.dropoff_ca
 _st4.cleared_log_list = []
 _st4._acct_cand_key = None; _st4._acct_cand_n = 0
 _st4.terr_set = {"0Hh2R000000GnFtSAK"}   # current login's known territories
-_st4.events_fh = open(r'C:/Users/musta/AppData/Local/Temp/t32_events.jsonl','a')
+_st4.events_fh = open(_TMP + '/t32_events.jsonl','a')
 m.ACCOUNT_KEY = "0Hh2R000000GnFtSAK"
 OTHER = "0Hh9R000000ZZZTest"
 _one = json.dumps({"ServiceTerritoryId": OTHER, "AppointmentNumber": "SA-1", "x":1})
@@ -942,7 +946,7 @@ _st5.eta_fetch = {}; _st5.driver_order = {}; _st5.wo_cache = {}; _st5.dropoff_ca
 _st5.feed_times = {}
 _st5.cleared_log_list = []
 _st5.last_data_ts = 0; _st5.last_full_ts = 0; _st5.login_required = False
-_st5.events_fh = open(r'C:/Users/musta/AppData/Local/Temp/t33_events.jsonl','a')
+_st5.events_fh = open(_TMP + '/t33_events.jsonl','a')
 _sv = {"sa_id":"SA-D1","resource_id":"R1","call_id":"C1","status":"Dispatched",
        "status_since": now - 10*60000, "last_modified": now - 10*60000,
        "cleared": False, "chain_second": False, "work_type":"Tow",
@@ -984,7 +988,7 @@ _st6.eta_fetch = {}; _st6.driver_order = {}; _st6.wo_cache = {}; _st6.dropoff_ca
 _st6.feed_times = {}; _st6.feed_time_fetch = {}
 _st6.cleared_log_list = []
 _st6.last_data_ts = now; _st6.last_full_ts = now; _st6.login_required = False
-_st6.events_fh = open(r'C:/Users/musta/AppData/Local/Temp/t34_events.jsonl','a')
+_st6.events_fh = open(_TMP + '/t34_events.jsonl','a')
 _act = {"sa_id":"SA-A9","resource_id":"R5","call_id":"C9","status":"Dispatched",
         "status_since": now - 9*60000,   # seeded 9 min ago (wrong; real 25)
         "last_modified": now - 9*60000,
@@ -1045,7 +1049,7 @@ for a in ('services','drivers','alerts','etas','eta_fetch','driver_order',
 _st7.cleared_log_list = []
 _st7._acct_cand_key = None; _st7._acct_cand_n = 0; _st7.terr_set = set()
 _st7.last_data_ts = now; _st7.last_full_ts = now; _st7.login_required = False
-_st7.events_fh = open(r'C:/Users/musta/AppData/Local/Temp/t36_events.jsonl','a')
+_st7.events_fh = open(_TMP + '/t36_events.jsonl','a')
 _T1, _T2, _T3 = "0Hh2R000000000T1", "0Hh2R000000000T2", "0Hh2R000000000T3"
 _multi = lambda terrs: json.dumps([{"ServiceTerritoryId": t, "AppointmentNumber": "SA-%d" % i}
                                    for i, t in enumerate(terrs)])
@@ -1074,7 +1078,7 @@ for a in ('services','drivers','alerts','etas','eta_fetch','driver_order',
     setattr(_st8, a, {})
 _st8.cleared_log_list = []
 _st8.last_data_ts = now; _st8.last_full_ts = now; _st8.login_required = False
-_st8.events_fh = open(r'C:/Users/musta/AppData/Local/Temp/t37_events.jsonl','a')
+_st8.events_fh = open(_TMP + '/t37_events.jsonl','a')
 _sv37 = {"sa_id":"SA-RD","resource_id":"R7","call_id":"C7","status":"Dispatched",
          "status_since": now - 34*60000,   # live-observed first dispatch
          "last_modified": now - 34*60000,
@@ -1104,7 +1108,7 @@ for a in ('services','drivers','alerts','etas','eta_fetch','driver_order',
     setattr(_st9, a, {})
 _st9.cleared_log_list = []
 _st9.last_data_ts = now; _st9.last_full_ts = now; _st9.login_required = False
-_st9.events_fh = open(r'C:/Users/musta/AppData/Local/Temp/t38_events.jsonl','a')
+_st9.events_fh = open(_TMP + '/t38_events.jsonl','a')
 m.State.driver_name = lambda self, rid: "F"
 m.State.busy_on_rap = lambda self, rid: False
 m.State.future_day = lambda self, s: False

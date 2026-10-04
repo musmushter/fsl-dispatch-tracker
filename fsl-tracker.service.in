@@ -1,0 +1,25 @@
+[Unit]
+Description=FSL Dispatch Tracker (CDP listener + dashboard on :8787)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__TRACKER_DIR__
+ExecStart=__TRACKER_DIR__/.venv/bin/python __TRACKER_DIR__/tracker.py
+
+# The tracker has its own internal reconnect loop; this restarts it only if it
+# dies outright. systemd guarantees exactly ONE instance, which matters because
+# the dashboard port binds with SO_REUSEADDR — two instances would both "run"
+# while only one serves.
+Restart=always
+RestartSec=5
+
+# notify-send needs the session bus; a user unit does not inherit it.
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
+
+StandardOutput=append:__TRACKER_DIR__/tracker_stdout.log
+StandardError=append:__TRACKER_DIR__/tracker_stdout.log
+
+[Install]
+WantedBy=default.target

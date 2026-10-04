@@ -18,6 +18,7 @@ import json
 import math
 import re
 import subprocess
+import sys
 import time
 import traceback
 import urllib.request
@@ -1374,6 +1375,18 @@ def fire_toast(alert):
     tname = alert.get('custom_name') or alert['type']
     title = f"{tname} - {alert.get('driver', '?')}"
     body = f"{alert.get('detail', '')} (call {alert.get('call_id', '?')})"
+    if sys.platform != "win32":
+        # Linux / macOS: freedesktop notification instead of WinRT toasts.
+        # -a names the app so the alert is attributable in the notification log.
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["osascript", "-e",
+                                  f'display notification {json.dumps(body)} with title {json.dumps(title)}'])
+            else:
+                subprocess.Popen(["notify-send", "-a", "FSL Tracker", title, body])
+        except Exception as e:
+            print("toast failed:", e, flush=True)
+        return
     ps = f"""
 [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
 [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
@@ -1412,9 +1425,14 @@ async def run():
     except Exception:
         print("=" * 60, flush=True)
         print("CANNOT REACH THE CONSOLE CHROME on port 9222.", flush=True)
-        print("Fix: double-click start_chrome.bat, then log in to the", flush=True)
-        print("dispatch console in that window. Keep it OPEN. Then", flush=True)
-        print("restart this tracker (start_tracker.bat).", flush=True)
+        if sys.platform == "win32":
+            print("Fix: double-click start_chrome.bat, then log in to the", flush=True)
+            print("dispatch console in that window. Keep it OPEN. Then", flush=True)
+            print("restart this tracker (start_tracker.bat).", flush=True)
+        else:
+            print("Fix: run ./start_chrome.sh, then log in to the dispatch", flush=True)
+            print("console in that window. Keep it OPEN. Then restart this", flush=True)
+            print("tracker (./start_tracker.sh, or: systemctl --user restart fsl-tracker).", flush=True)
         print("=" * 60, flush=True)
         raise SystemExit(1)
 

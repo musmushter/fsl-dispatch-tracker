@@ -10,3 +10,7 @@ recon/
 console_profile/
 
 settings*.json
+
+# linux port — local artifacts
+.venv/
+tests_out.txt
