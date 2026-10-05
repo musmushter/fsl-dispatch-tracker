@@ -144,7 +144,12 @@ else
 
     mkdir -p "$PROFILE"; : > "$CLOG"
     keep_signed_in
-    say "launching $(basename "$CHROME") with the dispatch console"
+    say "launching $(basename "$CHROME")"
+    # NOTE: deliberately NO url argument. With 'continue where you left off'
+    # Chromium restores the previous session — console tab included — and also
+    # opening the console url produced a SECOND console tab beside the restored
+    # one, on every launch from a closed browser. Step 2 opens the console only
+    # if the restore brought nothing back.
     # --remote-allow-origins=* is REQUIRED on Chrome 111+ or the CDP websocket
     # is refused while /json/version still answers (a silent reconnect loop).
     # A dedicated NON-default profile is what keeps Chrome 136+ from demanding
@@ -152,7 +157,7 @@ else
     nohup "$CHROME" --remote-debugging-port=$CDP_PORT "--remote-allow-origins=*" \
         --user-data-dir="$PROFILE" --no-first-run --no-default-browser-check \
         --ozone-platform-hint=auto --disable-features=Vulkan --disable-infobars \
-        "$CONSOLE_URL" >>"$CLOG" 2>&1 &
+        >>"$CLOG" 2>&1 &
 
     for i in $(seq 1 30); do cdp_up && break; sleep 1; done
     cdp_up || { echo; tail -15 "$CLOG" 2>/dev/null
