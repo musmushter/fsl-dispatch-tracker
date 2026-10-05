@@ -29,6 +29,43 @@ cdp_up()  { curl -s --max-time 3 "http://127.0.0.1:$CDP_PORT/json/version" >/dev
 dash_up() { curl -s --max-time 3 "http://127.0.0.1:$DASH_PORT/dashboard.html" >/dev/null 2>&1; }
 pages()   { curl -s --max-time 5 "http://127.0.0.1:$CDP_PORT/json/list" 2>/dev/null; }
 
+# Keep you signed in across browser restarts.
+#
+# Salesforce's auth cookies (login.salesforce.com/session, __Secure-has-sid,
+# inst, clientSrc) are SESSION-ONLY, and Chromium DELETES session-only cookies
+# on a clean exit unless "Continue where you left off" is enabled — in which
+# case it persists them. That single pref is the whole difference between
+# needing a fresh login after every restart and staying signed in.
+# No credentials are read, stored or typed here.
+#
+# MUST run while the browser is NOT running: Chromium rewrites Preferences from
+# its in-memory copy on exit and would clobber the edit.
+keep_signed_in() {
+    [ -f "$PROFILE/Default/Preferences" ] || return 0
+    PY="$ROOT/.venv/bin/python"
+    [ -x "$PY" ] || return 0
+    "$PY" - "$PROFILE/Default/Preferences" <<'PYEOF' 2>/dev/null || true
+import json, sys
+path = sys.argv[1]
+try:
+    d = json.load(open(path, encoding="utf-8"))
+except Exception:
+    sys.exit(0)                      # fresh profile; Chromium writes its own
+changed = False
+sess = d.setdefault("session", {})
+if sess.get("restore_on_startup") != 1:
+    sess["restore_on_startup"] = 1   # 1 = continue where you left off
+    changed = True
+prof = d.setdefault("profile", {})
+if prof.get("exit_type") != "Normal":
+    prof["exit_type"] = "Normal"     # don't show the crash-restore bubble
+    changed = True
+if changed:
+    json.dump(d, open(path, "w", encoding="utf-8"))
+    print("   session persistence enabled (survives browser restarts)")
+PYEOF
+}
+
 echo "FSL tracker — starting up"
 
 # ---------------- 1. console browser ----------------
@@ -59,6 +96,7 @@ else
         "Install one with:  sudo pacman -S chromium"
 
     mkdir -p "$PROFILE"; : > "$CLOG"
+    keep_signed_in
     say "launching $(basename "$CHROME") with the dispatch console"
     # --remote-allow-origins=* is REQUIRED on Chrome 111+ or the CDP websocket
     # is refused while /json/version still answers (a silent reconnect loop).
