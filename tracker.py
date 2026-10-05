@@ -75,7 +75,8 @@ DEFAULT_SETTINGS = {"muted_types": [], "muted_drivers": [],
                     "rules": [], "disabled_builtins": [],
                     "builtin_overrides": {},
                     "numeric_names_external": True,
-                    "kmi_show": False}
+                    "kmi_show": False,
+                    "close_reroute_popups": False}
 SETTINGS = dict(DEFAULT_SETTINGS)
 
 def load_settings():
@@ -89,7 +90,8 @@ def load_settings():
                     "disabled_builtins": list(data.get("disabled_builtins") or []),
                     "builtin_overrides": dict(data.get("builtin_overrides") or {}),
                     "numeric_names_external": bool(data.get("numeric_names_external", True)),
-                    "kmi_show": bool(data.get("kmi_show", False))}
+                    "kmi_show": bool(data.get("kmi_show", False)),
+                    "close_reroute_popups": bool(data.get("close_reroute_popups", False))}
     except Exception:
         SETTINGS = dict(DEFAULT_SETTINGS)
 
@@ -381,6 +383,44 @@ async def cdp_page_ws_async(needle="dispatch-console"):
         return await _page_via_browser_ws(needle)
     except Exception:
         return None, None
+
+
+# ---------------- Automated Reroute Request popup ----------------
+# The console raises a modal headed 'Automated Reroute Request' carrying an
+# inbound offer that expects Accept/Decline, and its own body text warns that
+# no response means the job is reassigned to the next provider. Dismissing it
+# is therefore a real DISPATCH DECISION, not cosmetics — so the tracker always
+# logs what it sees and only clicks when the user arms it in Settings
+# (close_reroute_popups, default OFF).
+#
+# The matcher is deliberately narrow: ONLY a modal whose own header text reads
+# exactly 'Automated Reroute Request' is touched, and only through its own
+# button.slds-modal__close. A blind slds-modal__close click would also shut the
+# work-order lightbox and feed popups the dispatcher may be reading.
+REROUTE_POPUP_JS = r"""
+(() => {
+  const CLICK = __CLICK__;
+  const leaves = Array.from(document.querySelectorAll('*')).filter(el =>
+      el.children.length === 0 &&
+      /^\s*Automated Reroute Request\s*$/i.test((el.textContent || '').trim()));
+  if (!leaves.length) return '';
+  // Climb until we reach the ancestor that actually OWNS the modal's X. Do NOT
+  // stop at the first class matching /slds-modal/ — the header div itself is
+  // 'slds-modal__header' and contains no close button, so stopping there made
+  // this matcher silently return '' on the real dialog.
+  let m = leaves[0], x = null;
+  for (let i = 0; i < 12 && m; i++) {
+    const cand = m.querySelector ? m.querySelector('button.slds-modal__close') : null;
+    if (cand) { x = cand; break; }
+    m = m.parentElement;
+  }
+  if (!x || !m) return '';
+  const offer = (m.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+  const visible = !!(x.offsetParent || x.getClientRects().length);
+  if (CLICK && visible) x.click();
+  return JSON.stringify({clicked: CLICK && visible, offer: offer});
+})()
+"""
 
 
 # ---------------- page-context fetch (module level, for HTTP-thread use) ----
@@ -2105,6 +2145,53 @@ async def run():
             except Exception:
                 return None
 
+        async def reroute_popup_loop():
+            """Watch the console for the 'Automated Reroute Request' modal.
+
+            Always logs it (kind 'reroute_popup', with the offer text); clicks
+            its X only when the close_reroute_popups setting is on. Logs once
+            per popup — the modal persists across polls until dismissed, so a
+            naive loop would write an event every 4 s.
+            """
+            seen = None
+            while True:
+                await asyncio.sleep(4)
+                try:
+                    ws_target, page_url = await cdp_page_ws_async()
+                    if not ws_target or "/login" in (page_url or ""):
+                        continue
+                    click = bool(SETTINGS.get("close_reroute_popups", False))
+                    expr = REROUTE_POPUP_JS.replace("__CLICK__",
+                                                    "true" if click else "false")
+                    import websockets as _w
+                    async with _w.connect(ws_target,
+                                          max_size=8 * 1024 * 1024) as tws:
+                        await tws.send(json.dumps({
+                            "id": 1, "method": "Runtime.evaluate",
+                            "params": {"expression": expr, "returnByValue": True}}))
+                        while True:
+                            m = json.loads(await asyncio.wait_for(tws.recv(),
+                                                                  timeout=15))
+                            if m.get("id") == 1:
+                                val = (m.get("result", {}).get("result", {})
+                                       or {}).get("value")
+                                if val:
+                                    info = json.loads(val)
+                                    if info["offer"] != seen:
+                                        seen = info["offer"]
+                                        state.log_event("reroute_popup",
+                                                        closed=info["clicked"],
+                                                        offer=info["offer"])
+                                        print(("reroute popup CLOSED: "
+                                               if info["clicked"] else
+                                               "reroute popup seen (not closing): ")
+                                              + info["offer"][:150], flush=True)
+                                elif seen is not None:
+                                    seen = None   # gone -> re-arm for the next one
+                                break
+                except Exception:
+                    await asyncio.sleep(15)
+
         async def watchdog_loop():
             """Keeps the tracker's picture complete:
             - reload once shortly after startup if no full-day load arrived
@@ -2165,8 +2252,9 @@ async def run():
         ft_task = asyncio.create_task(feed_time_loop())
         do_task = asyncio.create_task(dropoff_loop())
         gb_task = asyncio.create_task(gantt_backfill_loop())
+        rp_task = asyncio.create_task(reroute_popup_loop())
         await asyncio.gather(reader_task, snap_task, wd_task, eta_task, wo_task,
-                             ft_task, do_task, gb_task)
+                             ft_task, do_task, gb_task, rp_task)
 
 
 if __name__ == "__main__":
@@ -2253,7 +2341,8 @@ if __name__ == "__main__":
                                   "disabled_builtins": SETTINGS.get("disabled_builtins", []),
                                   "builtin_overrides": SETTINGS.get("builtin_overrides", {}),
                                   "numeric_names_external": SETTINGS.get("numeric_names_external", True),
-                                  "kmi_show": SETTINGS.get("kmi_show", False)}).encode()
+                                  "kmi_show": SETTINGS.get("kmi_show", False),
+                                  "close_reroute_popups": SETTINGS.get("close_reroute_popups", False)}).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(out)))
@@ -2284,6 +2373,7 @@ if __name__ == "__main__":
                                                  if isinstance(v, dict)}
                 SETTINGS["numeric_names_external"] = bool(body.get("numeric_names_external", True))
                 SETTINGS["kmi_show"] = bool(body.get("kmi_show", False))
+                SETTINGS["close_reroute_popups"] = bool(body.get("close_reroute_popups", False))
                 save_settings()
                 out = json.dumps({"ok": True}).encode()
                 self.send_response(200)

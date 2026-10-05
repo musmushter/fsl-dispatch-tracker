@@ -141,6 +141,16 @@ tr.groupheader td { background: rgba(255,255,255,.06); color: var(--fg);
     <span class="adef">Adds a button under Report that opens the Work Order feed
     messages containing "KMI" or "2nd", with their timestamps.</span>
   </div>
+  <div class="arow">
+    <input type="checkbox" id="closereroute" onchange="setCloseReroute(this.checked)">
+    <span class="aname">Auto-close reroute popups</span>
+    <span class="adef">Clicks the X on the console's <b>Automated Reroute Request</b>
+    dialog. That dialog is an inbound job offer expecting Accept or Decline, and its
+    own text warns the job is <b>reassigned if no response is sent</b> — so leaving
+    this unchecked keeps it on screen. Either way every popup is written to the event
+    log (kind <code>reroute_popup</code>) with the offer text, so nothing is lost
+    silently.</span>
+  </div>
   <button class="abtn" style="margin-top:12px" onclick="toggleRuleForm()">＋ Add new alert</button>
   <div id="ruleform" style="display:none; margin-top:10px; border-top:1px solid var(--border); padding-top:10px"></div>
   <div id="setstatus" class="sethint"></div>
@@ -421,7 +431,7 @@ const BUILTIN_FIELDS = {
   MEMBER_WAITING:   [['wait_min','In current status for (min)']],
 };
 let mutedTypes = [], mutedDrivers = [], rules = [], disabledBuiltins = [];
-let builtinOverrides = {}, editingId = null, numExt = true, kmiShow = false;
+let builtinOverrides = {}, editingId = null, numExt = true, kmiShow = false, closeReroute = false;
 
 const RULE_FIELDS = [
   ['status',        'Status'],
@@ -448,6 +458,7 @@ function toggleSettings() {
 function buildSettingsPanel() {
   document.getElementById('numext').checked = numExt;
   document.getElementById('kmishow').checked = kmiShow;
+  document.getElementById('closereroute').checked = closeReroute;
   renderAList();
   applyKmiButtons();
   renderRuleForm();
@@ -470,7 +481,8 @@ async function pushSettings() {
                              rules: rules, disabled_builtins: disabledBuiltins,
                              builtin_overrides: builtinOverrides,
                              numeric_names_external: numExt,
-                             kmi_show: kmiShow }) });
+                             kmi_show: kmiShow,
+                             close_reroute_popups: closeReroute }) });
     const j = await r.json();
     document.getElementById('setstatus').textContent = j.ok ? 'saved ✓ (applies within ~25 s)' : 'save FAILED: ' + j.err;
   } catch(e) {
@@ -505,6 +517,7 @@ async function showKmi(btn, rd) {
   }
 }
 function setKmiShow(v) { kmiShow = v; pushSettings(); applyKmiButtons(); }
+function setCloseReroute(v) { closeReroute = v; pushSettings(); }
 function applyKmiButtons() {
   document.querySelectorAll('#rows .kmibtn').forEach(b => b.style.display = kmiShow ? '' : 'none');
 }
@@ -675,13 +688,14 @@ fetch('/settings').then(r => r.json()).then(j => {
   builtinOverrides = j.builtin_overrides || {};
   numExt = j.numeric_names_external !== false;
   kmiShow = !!j.kmi_show;
+  closeReroute = !!j.close_reroute_popups;
   applyKmiButtons();
 }).catch(()=>{});
 setInterval(() => { fetch('/settings').then(r=>r.json()).then(j => {
   mutedTypes = j.muted_types || []; mutedDrivers = j.muted_drivers || [];
   rules = j.rules || []; disabledBuiltins = j.disabled_builtins || [];
   builtinOverrides = j.builtin_overrides || {};
-  kmiShow = !!j.kmi_show; applyKmiButtons();
+  kmiShow = !!j.kmi_show; closeReroute = !!j.close_reroute_popups; applyKmiButtons();
 }).catch(()=>{}); }, 15000);
 </script>
 </body>
