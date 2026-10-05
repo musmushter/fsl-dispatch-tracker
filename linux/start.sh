@@ -66,6 +66,23 @@ if changed:
 PYEOF
 }
 
+# -f/--fg: run the tracker in THIS terminal (the Windows-cmd-window model) so
+# closing the window, or Ctrl-C, stops it — instead of handing it to the
+# systemd user service, which is the better default (survives a crash, logs to
+# journald, keeps running after logout).
+FG=0
+case "${1:-}" in -f|--fg|--foreground) FG=1 ;; esac
+
+open_dashboard() {
+    if pages | grep -q "$DASH_URL"; then
+        say "dashboard tab already open"
+    else
+        curl -s -X PUT --max-time 10 "http://127.0.0.1:$CDP_PORT/json/new?$DASH_URL" \
+            >/dev/null 2>&1 && say "opened in the console browser" \
+                                || say "could not open the tab — go to $DASH_URL"
+    fi
+}
+
 echo "FSL tracker — starting up"
 
 # ---------------- 1. console browser ----------------
@@ -147,6 +164,23 @@ fi
 
 # ---------------- 3. tracker ----------------
 echo "== 3/4 tracker =="
+if [ "$FG" = 1 ]; then
+    # Foreground run: this terminal owns the tracker, so closing it stops the
+    # tracker. The background service must release :8787 first, or the
+    # foreground instance cannot bind it.
+    if systemctl --user is-active fsl-tracker >/dev/null 2>&1; then
+        say "stopping fsl-tracker.service so this terminal can own the tracker"
+        systemctl --user stop fsl-tracker
+        for i in $(seq 1 10); do dash_up || break; sleep 1; done
+    fi
+    PY="$ROOT/.venv/bin/python"
+    [ -x "$PY" ] || fail "no venv python at $PY" \
+        "Run ./linux/install_linux.sh first (it builds the venv and deps)."
+    say "tracker running in THIS terminal — close it (or Ctrl-C) to stop"
+    open_dashboard
+    echo
+    exec "$PY" "$ROOT/tracker.py"
+fi
 if dash_up; then
     say "already serving :$DASH_PORT — leaving it running"
 else
@@ -169,13 +203,7 @@ fi
 
 # ---------------- 4. dashboard tab ----------------
 echo "== 4/4 dashboard =="
-if pages | grep -q "$DASH_URL"; then
-    say "dashboard tab already open"
-else
-    curl -s -X PUT --max-time 10 "http://127.0.0.1:$CDP_PORT/json/new?$DASH_URL" \
-        >/dev/null 2>&1 && say "opened in the console browser" \
-                            || say "could not open the tab — go to $DASH_URL"
-fi
+open_dashboard
 
 echo
 echo "Ready. Console + dashboard are tabs in the same browser window."

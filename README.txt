@@ -186,6 +186,26 @@ The unit restarts the tracker if it dies and logs to journald:
     journalctl --user -u fsl-tracker -f
 To keep it running after logout:   sudo loginctl enable-linger $USER
 
+Stopping / controlling the tracker (Linux)
+The tracker is a systemd USER SERVICE, so there is no window to close — that is
+the job the Windows cmd window did. Controlling it:
+    systemctl --user stop fsl-tracker        <- this IS "closing the tracker"
+    systemctl --user start fsl-tracker
+    systemctl --user restart fsl-tracker
+    systemctl --user status fsl-tracker
+    journalctl --user -u fsl-tracker -f      <- watch its output live
+    tail -f tracker_stdout.log               <- same thing, from the file
+Stopping the tracker does NOT touch the browser; the console tab stays open and
+logged in, so restarting is instant. Stopping the BROWSER is what needs a fresh
+login (though 'Remember me' plus the session-restore pref in start.sh usually
+avoid even that).
+
+Prefer the Windows-style window you can close? Run it in the foreground:
+    ./linux/start.sh --fg
+The tracker then stays in that terminal; closing the terminal (or Ctrl-C)
+stops it. Any background service is stopped first so the terminal can own
+port 8787.
+
 Browser: start.sh prefers a system chromium / google-chrome and falls
 back to the Hermes-bundled Chrome for Testing, resolved by glob so a Hermes
 update that renumbers it cannot break the launcher. It always launches its own
