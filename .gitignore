@@ -13,6 +13,7 @@ settings*.json
 
 # linux port — local artifacts
 .venv/
+linux/tools/
 tests_out.txt
 
 tests_reverted.txt

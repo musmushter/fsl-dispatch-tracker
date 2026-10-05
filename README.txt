@@ -47,6 +47,7 @@ FILES
   linux\            everything Linux-only
       install_linux.sh        one-shot install: venv + deps + tests + service
       start.sh                browser + console + tracker + dashboard, in one go
+      share_link.sh           temporary public share link (see LINUX below)
       fsl-tracker.service.in  systemd user unit template
   state*.json       current snapshot (dashboard reads this)
   events*.jsonl     audit log: every status change, alert fired, watchdog reload
@@ -161,8 +162,11 @@ anywhere, no install or login. The link is temporary: it changes every time
 you run share_link.bat and dies when you close its window. To let viewers
 hear about alerts, the dashboard header has a 'Enable alerts' bell — they
 click it once, allow browser notifications, and get a popup per urgent
-alert (same text as the Windows toasts). Read-only: viewers cannot change
-anything; the link only exposes the dashboard, not your machine.
+alert (same text as the Windows toasts). The link only exposes the dashboard,
+not your machine — but note that any viewer can also reach tracker.py's
+POST /settings route, which is deliberately NOT authenticated (it is how every
+viewer's gear menu stays in sync), so share the link only with people you would
+let change the alert settings.
 
 LINUX (CachyOS / Arch, systemd)
 ===============================
@@ -216,4 +220,18 @@ chrome://inspect/#remote-debugging: that mode is popup-gated (Chrome asks on
 every attach and cannot be told to remember), so it cannot run unattended.
 
 Alerts on Linux use notify-send instead of Windows toasts (same text).
-Not yet ported to Linux: share_link (needs cloudflared) and diagnose.bat.
+
+Sharing: ./linux/share_link.sh is the counterpart of windows\share_link.bat —
+a quick Cloudflare tunnel and a temporary trycloudflare.com link, printed and
+copied to the clipboard if a clipboard tool is installed. It uses a system
+cloudflared if you have one, otherwise it downloads the static binary once into
+linux\tools\cloudflared (about 40 MB; gitignored, and never needed again). The
+link can take a minute or two to become reachable while its DNS record is
+created, so the script waits and tells you when it is safe to send. Closing the
+window (or Ctrl-C) tears the tunnel down; the link then returns 530.
+
+The same warning as Windows applies on Linux: the link reaches tracker.py's
+HTTP routes, and POST /settings is deliberately unauthenticated, so share it
+only with people you would let change the alert settings.
+
+Not yet ported to Linux: diagnose.bat.
