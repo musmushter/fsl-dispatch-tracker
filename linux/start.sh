@@ -91,8 +91,20 @@ fi
 # persistent login.salesforce.com helper tab is always present and means
 # nothing, so match the redirect's own startURL, not the bare word 'login'.
 if pages | grep -q 'login?[^"]*dispatch-console'; then
-    say "NOTE: the console is on the login page — sign in there; the tracker"
-    say "      only reads the console you are signed in to"
+    say "console needs a sign-in — bringing that tab to the front"
+    TID=$(pages | "$ROOT/.venv/bin/python" -c "
+import json,sys
+try:
+    for t in json.load(sys.stdin):
+        if t.get('type') == 'page' and 'dispatch-console' in t.get('url',''):
+            print(t['id']); break
+except Exception:
+    pass
+" 2>/dev/null)
+    [ -n "${TID:-}" ] && curl -s --max-time 5 \
+        "http://127.0.0.1:$CDP_PORT/json/activate/$TID" >/dev/null 2>&1
+    say "sign in there. Tick 'Remember me' and the session then survives"
+    say "browser restarts, so this should be rare."
 fi
 
 # ---------------- 3. tracker ----------------
