@@ -387,11 +387,10 @@ async def cdp_page_ws_async(needle="dispatch-console"):
 
 # ---------------- Automated Reroute Request popup ----------------
 # The console raises a modal headed 'Automated Reroute Request' carrying an
-# inbound offer that expects Accept/Decline, and its own body text warns that
-# no response means the job is reassigned to the next provider. Dismissing it
-# is therefore a real DISPATCH DECISION, not cosmetics — so the tracker always
-# logs what it sees and only clicks when the user arms it in Settings
-# (close_reroute_popups, default OFF).
+# inbound reroute offer. Responding to those offers is NOT part of this role —
+# the dispatcher was instructed to simply dismiss them — so the tracker clicks
+# the X automatically. Every popup is still written to the event log with its
+# offer text, so a record of what came in survives the dismissal.
 #
 # The matcher is deliberately narrow: ONLY a modal whose own header text reads
 # exactly 'Automated Reroute Request' is touched, and only through its own

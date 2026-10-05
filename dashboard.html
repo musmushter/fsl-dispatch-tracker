@@ -145,11 +145,10 @@ tr.groupheader td { background: rgba(255,255,255,.06); color: var(--fg);
     <input type="checkbox" id="closereroute" onchange="setCloseReroute(this.checked)">
     <span class="aname">Auto-close reroute popups</span>
     <span class="adef">Clicks the X on the console's <b>Automated Reroute Request</b>
-    dialog. That dialog is an inbound job offer expecting Accept or Decline, and its
-    own text warns the job is <b>reassigned if no response is sent</b> — so leaving
-    this unchecked keeps it on screen. Either way every popup is written to the event
-    log (kind <code>reroute_popup</code>) with the offer text, so nothing is lost
-    silently.</span>
+    dialog. Dismissing these is the instructed handling for this role — responding
+    to the offer is not the dispatcher's job. Every popup is still written to the
+    event log (kind <code>reroute_popup</code>) with its offer text, so there is a
+    record of what came in.</span>
   </div>
   <button class="abtn" style="margin-top:12px" onclick="toggleRuleForm()">＋ Add new alert</button>
   <div id="ruleform" style="display:none; margin-top:10px; border-top:1px solid var(--border); padding-top:10px"></div>
