@@ -219,7 +219,22 @@ instead point the tracker at a browser you enabled debugging on via
 chrome://inspect/#remote-debugging: that mode is popup-gated (Chrome asks on
 every attach and cannot be told to remember), so it cannot run unattended.
 
-Alerts on Linux use notify-send instead of Windows toasts (same text).
+Alerts on Linux use notify-send instead of Windows toasts (same text) and, like
+the Windows toast — whose PowerShell ends with SystemSounds::Exclamation — they
+now PLAY A SOUND too. notify-send on its own is silent, which is why the very
+same alert was quiet on Linux while Windows beeped. The sound follows your
+desktop's sound theme via libcanberra (canberra-gtk-play -i dialog-warning),
+falling back to paplay / pw-play on the freedesktop dialog-warning.oga file.
+
+It needs no extra config and it obeys the mute settings for free, because muted
+alert types never reach fire_toast in the first place. Overrides, if you want
+them: FSL_TOAST_SILENT=1 silences it, FSL_TOAST_SOUND=<file> plays your own
+file, FSL_TOAST_SOUND_EVENT=<name> picks a different libcanberra event (try
+alarm-clock-elapsed or bell).
+
+This is the DESKTOP toast. The dashboard's own 'Enable alerts' browser popups
+are separate — they are whatever the browser and your notification daemon do
+with them.
 
 SHARING: use the Share button in the dashboard header (next to Settings). Same
 on both platforms. It opens a small panel with Create link / Copy link / Close

@@ -1538,6 +1538,44 @@ class State:
 
 
 # ---------------- toast ----------------
+# ---- alert sound -----------------------------------------------------------
+# The Windows branch of fire_toast ends with SystemSounds::Exclamation, so a
+# Windows toast is audible. notify-send is silent by itself, which is why the
+# SAME alert made no sound on Linux — this mirrors the Windows behaviour.
+# libcanberra is the freedesktop way to play a named event sound (it follows the
+# user's sound theme); the theme file through a plain player is the fallback.
+# A missing player must never cost the toast itself.
+DEFAULT_SOUND_FILE = "/usr/share/sounds/freedesktop/stereo/dialog-warning.oga"
+
+
+def alert_sound_commands():
+    """Candidate argv lists for the alert sound, best first. [] = stay silent."""
+    if os.environ.get("FSL_TOAST_SILENT") == "1":
+        return []
+    cmds = []
+    exe = shutil.which("canberra-gtk-play")
+    if exe:
+        cmds.append([exe, "-i", os.environ.get("FSL_TOAST_SOUND_EVENT", "dialog-warning")])
+    path = os.environ.get("FSL_TOAST_SOUND", DEFAULT_SOUND_FILE)
+    if path and os.path.exists(path):
+        for player in ("paplay", "pw-play"):
+            exe = shutil.which(player)
+            if exe:
+                cmds.append([exe, path])
+    return cmds
+
+
+def play_alert_sound():
+    """Play the alert sound; never raise (a silent box must still get the toast)."""
+    for cmd in alert_sound_commands():
+        try:
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except Exception:
+            continue
+    return False
+
+
 def fire_toast(alert):
     tname = alert.get('custom_name') or alert['type']
     title = f"{tname} - {alert.get('driver', '?')}"
@@ -1551,6 +1589,7 @@ def fire_toast(alert):
                                   f'display notification {json.dumps(body)} with title {json.dumps(title)}'])
             else:
                 subprocess.Popen(["notify-send", "-a", "FSL Tracker", title, body])
+                play_alert_sound()
         except Exception as e:
             print("toast failed:", e, flush=True)
         return

@@ -15,6 +15,7 @@ spec.loader.exec_module(m)
 # engine fires real desktop toasts — so a plain test run spams the user's
 # notification centre with fixture alerts (D22/D21b/P3, call 555xxx). Stub the
 # notifier out: tests assert on alert OBJECTS, never on the toast itself.
+_real_fire_toast = m.fire_toast          # kept intact for the T43 sound cases
 m.fire_toast = lambda *a, **k: None
 
 CH = ZoneInfo("America/Chicago")
@@ -1314,6 +1315,56 @@ finally:
     else:
         os.environ["FSL_CLOUDFLARED"] = _orig_env_cf
     m.shutil.rmtree(_share_dir, ignore_errors=True)
+
+
+# ---- T43: the alert sound ------------------------------------------------
+# The Windows toast branch ends with SystemSounds::Exclamation, so a Windows
+# alert IS audible; notify-send is silent on its own, so the very same alert
+# made no sound on Linux. T43d locks the Linux branch to play one too — and
+# locks the win32 branch to stay exactly as it was.
+_orig_which = m.shutil.which
+_orig_popen = m.subprocess.Popen
+_orig_play  = m.play_alert_sound
+_snd_env = {k: os.environ.pop(k, None)
+            for k in ("FSL_TOAST_SILENT", "FSL_TOAST_SOUND", "FSL_TOAST_SOUND_EVENT")}
+try:
+    m.shutil.which = lambda n: ("/usr/bin/" + n) if n == "canberra-gtk-play" else None
+    _c = m.alert_sound_commands()
+    check("T43a the sound prefers libcanberra's named event",
+          bool(_c) and _c[0] == ["/usr/bin/canberra-gtk-play", "-i", "dialog-warning"],
+          f"-> {_c[:1]}")
+
+    m.shutil.which = lambda n: None            # no player at all
+    check("T43b with no player it stays silent and does not raise",
+          m.alert_sound_commands() == [] and m.play_alert_sound() is False)
+
+    m.shutil.which = _orig_which
+    os.environ["FSL_TOAST_SILENT"] = "1"
+    check("T43c FSL_TOAST_SILENT=1 switches the sound off",
+          m.alert_sound_commands() == [] and m.play_alert_sound() is False)
+    os.environ.pop("FSL_TOAST_SILENT", None)
+
+    _calls = []
+    m.subprocess.Popen = lambda cmd, *a, **k: _calls.append(cmd)
+    m.play_alert_sound = lambda: _calls.append("SOUND")
+    _real_fire_toast({"type": "DISPATCH_OVERDUE", "driver": "D9",
+                      "detail": "late", "custom_name": None, "call_id": "555000"})
+    if sys.platform == "win32":
+        check("T43d the win32 toast path is unchanged: PowerShell, no added sound",
+              "SOUND" not in _calls and any(c and c[0] == "powershell" for c in _calls))
+    else:
+        check("T43d a Linux toast now plays the alert sound as well",
+              "SOUND" in _calls and any(c and c[0] == "notify-send" for c in _calls),
+              f"-> {_calls}")
+finally:
+    m.shutil.which = _orig_which
+    m.subprocess.Popen = _orig_popen
+    m.play_alert_sound = _orig_play
+    for _k, _v in _snd_env.items():
+        if _v is None:
+            os.environ.pop(_k, None)
+        else:
+            os.environ[_k] = _v
 
 
 # Summary LAST: any check placed after this point runs UNCOUNTED and the
