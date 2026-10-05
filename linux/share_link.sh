@@ -15,6 +15,17 @@ DASH_URL="http://127.0.0.1:$DASH_PORT"
 TOOLS="$ROOT/linux/tools"
 BIN="$TOOLS/cloudflared"
 
+# The tunnel must not outlive whatever opened it. There are two ways it can:
+# the terminal window is closed without signalling us, or the process that
+# launched us exits and leaves us orphaned while still holding an open tunnel.
+# Either way the dashboard keeps being published with nothing on screen to say
+# so — seen live: a real tunnel to :8787 still serving with no window anywhere.
+# So remember the terminal and the parent, and leave when either goes.
+# FSL_SHARE_KEEP=1 deliberately opts out (a link that survives its window).
+WATCH_TTY="$(tty 2>/dev/null || true)"
+case "$WATCH_TTY" in /dev/pts/*|/dev/tty*) ;; *) WATCH_TTY="" ;; esac
+WATCH_PPID="$PPID"
+
 say() { printf '   %s\n' "$*"; }
 die() { echo; printf '   %s\n' "$1"; shift
         for l in "$@"; do printf '   %s\n' "$l"; done; echo; exit 1; }
@@ -68,8 +79,9 @@ fi
 # log for it, then stream the log so its errors stay visible.
 LOG="$(mktemp -t fsl-share.XXXXXX)"
 cleanup() {
-    [ -n "${CFPID:-}" ]   && kill "$CFPID"   2>/dev/null
-    [ -n "${TAILPID:-}" ] && kill "$TAILPID" 2>/dev/null
+    [ -n "${CFPID:-}" ]        && kill "$CFPID"        2>/dev/null
+    [ -n "${TAILPID:-}" ]      && kill "$TAILPID"      2>/dev/null
+    [ -n "${WATCHDOG_PID:-}" ] && kill "$WATCHDOG_PID" 2>/dev/null
     rm -f "$LOG"
     return 0
 }
@@ -79,6 +91,29 @@ trap on_signal INT TERM HUP
 
 "$CF" tunnel --url "$DASH_URL" --no-autoupdate >"$LOG" 2>&1 &
 CFPID=$!
+
+# Guard the tunnel for the WHOLE run, not just the final tail: the reachability
+# check below can take minutes, and an orphan created during it was still
+# serving long after the window was gone. This runs from the moment cloudflared
+# starts until cleanup kills it.
+WATCHDOG_PID=""
+if [ "${FSL_SHARE_KEEP:-0}" != "1" ]; then
+    WATCH_SELF=$$
+    (
+        while :; do
+            sleep 2
+            gone=0
+            if [ -n "$WATCH_TTY" ] && [ ! -e "$WATCH_TTY" ]; then gone=1; fi
+            if [ "$(ps -o ppid= -p "$WATCH_SELF" 2>/dev/null | tr -d ' ')" != "$WATCH_PPID" ]; then gone=1; fi
+            if [ "$gone" = 1 ]; then
+                printf '   the window that opened this is gone — closing the tunnel\n'
+                kill -TERM "$WATCH_SELF" 2>/dev/null
+                exit 0
+            fi
+        done
+    ) &
+    WATCHDOG_PID=$!
+fi
 
 LINK=""
 for _ in $(seq 1 80); do                          # up to 40s

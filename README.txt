@@ -240,6 +240,13 @@ the Desktop as well. Opening it starts konsole on the same script, so that
 window IS the link — closing it ends the tunnel. Unlike a .bat, if the script
 fails the window stays open so you can read the reason.
 
+Either way the tunnel is tied to whatever opened it: it also shuts down if that
+terminal disappears or the launcher process goes away, so a link cannot quietly
+keep publishing your board after you have closed everything. (That is not
+hypothetical — an unattended tunnel was found still serving the real dashboard
+with no window anywhere.) Set FSL_SHARE_KEEP=1 only if you deliberately want a
+link to outlive its window.
+
 The same warning as Windows applies on Linux: the link reaches tracker.py's
 HTTP routes, and POST /settings is deliberately unauthenticated, so share it
 only with people you would let change the alert settings.
