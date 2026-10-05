@@ -159,12 +159,14 @@ else
         --ozone-platform-hint=auto --disable-features=Vulkan --disable-infobars \
         >>"$CLOG" 2>&1 &
 
-    for i in $(seq 1 30); do cdp_up && break; sleep 1; done
+    # 0.25s ticks. The port normally answers in about a second, so 1s ticks
+    # discarded most of that; 120 ticks keeps the 30s ceiling.
+    for i in $(seq 1 120); do cdp_up && break; sleep 0.25; done
     cdp_up || { echo; tail -15 "$CLOG" 2>/dev/null
                 fail "debug port $CDP_PORT never came up within 30s." \
                      "Close every chrome/chromium window and run this again." \
                      "A Chrome already running WITHOUT the debug flag swallows the launch."; }
-    say "debug port UP after ${i}s"
+    say "debug port UP after $(awk -v i="${i:-0}" 'BEGIN{printf "%.1f", i*0.25}')s"
 fi
 
 # ---------------- 2. dispatch console ----------------
@@ -173,9 +175,14 @@ echo "== 2/4 dispatch console =="
 # 'continue where you left off' the previous tabs reappear ASYNCHRONOUSLY, and
 # deciding too early made this open a console tab that was about to be restored
 # anyway — that is where the duplicates came from.
+# Poll fast and stop the instant a console tab appears. Chromium's session
+# restore normally lands within a fraction of a second, so a 1s-per-tick loop
+# made every launch feel sluggish. The full window is only used on a fresh
+# profile, where nothing is coming back and we are about to open the tab
+# ourselves anyway.
 if ! pages | grep -q 'dispatch-console'; then
-    for _ in $(seq 1 8); do
-        sleep 1
+    for _ in $(seq 1 25); do          # 25 x 0.2s = 5s ceiling
+        sleep 0.2
         pages | grep -q 'dispatch-console' && break
     done
 fi
