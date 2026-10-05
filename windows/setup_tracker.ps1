@@ -16,7 +16,10 @@ $ErrorActionPreference = "Stop"
 $dir = $PSScriptRoot
 if (-not $dir) { $dir = Split-Path -Parent $MyInvocation.MyCommand.Path }
 if (-not $dir) { $dir = (Get-Location).Path }
-Set-Location $dir
+# $dir  = THIS folder (windows\): the launchers, SETUP.bat and the setup log
+# $root = the repo root one level up: tracker.py, console_profile, runtime data
+$root = Split-Path -Parent $dir
+Set-Location $root
 Start-Transcript -Path (Join-Path $dir "setup_log.txt") -Append | Out-Null
 
 # PowerShell 5.1 defaults to TLS 1.0 for downloads; python.org / dl.google.com
@@ -128,14 +131,14 @@ $pyExe = $pythonExe.Trim('"')
 $pyArgs = if ($pyArg) { " $pyArg" } else { "" }
 $trackerBat = @"
 @echo off
-cd /d "$dir"
+cd /d "$root"
 start "" "$pyExe"$pyArgs tracker.py
 "@
 Set-Content -Path "$dir\start_tracker.bat" -Value $trackerBat -Encoding ASCII
 
 $chromeBat = @"
 @echo off
-start "" "$chrome" --remote-debugging-port=9222 --remote-allow-origins=* --user-data-dir="$dir\console_profile" "https://aaa-ace.my.site.com/ACEContractorCommunity/s/dispatch-console"
+start "" "$chrome" --remote-debugging-port=9222 --remote-allow-origins=* --user-data-dir="$root\console_profile" "https://aaa-ace.my.site.com/ACEContractorCommunity/s/dispatch-console"
 "@
 Set-Content -Path "$dir\start_chrome.bat" -Value $chromeBat -Encoding ASCII
 Write-Host "  start_tracker.bat / start_chrome.bat updated."
@@ -146,18 +149,18 @@ $sm = [Environment]::GetFolderPath("Programs")
 $ws = New-Object -ComObject WScript.Shell
 $lnk = $ws.CreateShortcut("$sm\FSL Tracker Console.lnk")
 $lnk.TargetPath = $chrome
-$lnk.Arguments = "--remote-debugging-port=9222 --remote-allow-origins=* --user-data-dir=`"$dir\console_profile`" `"https://aaa-ace.my.site.com/ACEContractorCommunity/s/dispatch-console`""
-$lnk.WorkingDirectory = $dir
+$lnk.Arguments = "--remote-debugging-port=9222 --remote-allow-origins=* --user-data-dir=`"$root\console_profile`" `"https://aaa-ace.my.site.com/ACEContractorCommunity/s/dispatch-console`""
+$lnk.WorkingDirectory = $root
 $lnk.Save()
 $lnk = $ws.CreateShortcut("$sm\FSL Tracker.lnk")
 $lnk.TargetPath = "$dir\start_tracker.bat"
-$lnk.WorkingDirectory = $dir
+$lnk.WorkingDirectory = $root
 $lnk.Save()
 Write-Host "  'FSL Tracker Console' + 'FSL Tracker' in the Start Menu."
 
 # ---------- 6. first run: open the console for login ----------
 Say "Opening the dispatch console for first login..."
-Start-Process $chrome -ArgumentList "--remote-debugging-port=9222", "--remote-allow-origins=*", "--user-data-dir=`"$dir\console_profile`"", "https://aaa-ace.my.site.com/ACEContractorCommunity/s/dispatch-console"
+Start-Process $chrome -ArgumentList "--remote-debugging-port=9222", "--remote-allow-origins=*", "--user-data-dir=`"$root\console_profile`"", "https://aaa-ace.my.site.com/ACEContractorCommunity/s/dispatch-console"
 
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Green

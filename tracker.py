@@ -1546,15 +1546,14 @@ async def run():
         print("  tried http://127.0.0.1:%d/json/version" % CDP_HTTP_PORT, flush=True)
         print("  tried %s/DevToolsActivePort" % CDP_PROFILE_DIR, flush=True)
         if sys.platform == "win32":
-            print("Fix: double-click start_chrome.bat, then log in to the", flush=True)
-            print("dispatch console in that window. Keep it OPEN. Then", flush=True)
-            print("restart this tracker (start_tracker.bat).", flush=True)
+            print("Fix: double-click windows\\start_chrome.bat, then log in to", flush=True)
+            print("the dispatch console in that window. Keep it OPEN. Then", flush=True)
+            print("restart this tracker (windows\\start_tracker.bat).", flush=True)
         else:
-            print("Fix: open the dispatch console in your browser and KEEP THE", flush=True)
-            print("WINDOW OPEN (a minimized/closed window stalls the endpoint).", flush=True)
-            print("Enable debugging at chrome://inspect/#remote-debugging —", flush=True)
-            print("that writes DevToolsActivePort. Then restart this tracker", flush=True)
-            print("(./start_tracker.sh, or: systemctl --user restart fsl-tracker).", flush=True)
+            print("Fix: run ./linux/start_chrome.sh, then log in to the dispatch", flush=True)
+            print("console in that window. Keep it OPEN. Then restart this", flush=True)
+            print("tracker (./linux/start_tracker.sh, or:", flush=True)
+            print("systemctl --user restart fsl-tracker).", flush=True)
         print("=" * 60, flush=True)
         raise SystemExit(1)
 

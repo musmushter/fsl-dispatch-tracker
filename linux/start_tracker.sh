@@ -5,7 +5,9 @@
 # a window that vanishes. For always-on use, prefer the systemd user service:
 #   systemctl --user start fsl-tracker
 set -u
-cd "$(dirname "$(readlink -f "$0")")" || exit 1
+# this script lives in linux/; cd to the repo root one level up — the venv and
+# tracker.py both live there
+cd "$(dirname "$(dirname "$(readlink -f "$0")")")" || exit 1
 
 PY="$PWD/.venv/bin/python"
 if [ ! -x "$PY" ]; then

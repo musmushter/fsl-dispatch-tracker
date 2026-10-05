@@ -18,12 +18,13 @@ driver probably just forgot to flip status; the Movement column shows AT LOC.
 
 HOW TO START (after reboot, in this order)
 1. Console Chrome (required — the tracker listens to it):
-      "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="C:\Users\musta\AppData\Local\hermes\fsl_recon_profile" "https://aaa-ace.my.site.com/ACEContractorCommunity/s/dispatch-console"
-   Log in if asked (session usually persists in that profile).
-   Or just double-click:  start_chrome.bat
-2. Tracker:  double-click  start_tracker.bat
-   (runs: python C:\Users\musta\fsl_tracker\tracker.py)
+      double-click   windows\start_chrome.bat
+   (launches Chrome with --remote-debugging-port=9222 and its own
+   console_profile; log in if asked — the session usually persists there)
+2. Tracker:  double-click  windows\start_tracker.bat
 3. Dashboard:  http://127.0.0.1:8787/dashboard.html  (any browser; auto-refreshes)
+
+On Linux (CachyOS / Arch) see the LINUX section at the end of this file.
 
 Dedicated Chrome window may be minimized, but keep it OPEN. Closing it stops
 the data flow. If the tracker loses the full day snapshot it auto-reloads the
@@ -31,11 +32,29 @@ console tab (watchdog, max once/10 min). If the session expires you get a
 "LOGIN NEEDED" toast — log in through the FSL Chrome window only.
 
 FILES
-  tracker.py       the listener + alert engine + local dashboard server
-  dashboard.html   the live table (served at localhost:8787)
-  state.json       current snapshot (dashboard reads this)
-  events.jsonl     audit log: every status change, alert fired, watchdog reload
-  recon/           capture scripts + captured traffic from the build session
+  tracker.py        the listener + alert engine + local dashboard server
+  dashboard.html    the live table (served at localhost:8787)
+  tests.py          regression suite (run it before trusting a change)
+  README.txt        this file
+  windows\          everything Windows-only — the only folder Windows users touch
+      SETUP.bat               one-click install (start here on a new machine)
+      setup_tracker.ps1       the installer it runs
+      start_chrome.bat        console Chrome launcher  (regenerated per machine)
+      start_tracker.bat       tracker launcher         (regenerated per machine)
+      diagnose.bat            diagnostic run, prints why something fails
+      share_link.bat          temporary read-only share link
+      tools\cloudflared.exe   the tunnel share_link.bat uses
+  linux\            everything Linux-only
+      install_linux.sh        one-shot install: venv + deps + tests + service
+      start_chrome.sh         console browser launcher
+      start_tracker.sh        tracker launcher (foreground, pauses on exit)
+      fsl-tracker.service.in  systemd user unit template
+  state*.json       current snapshot (dashboard reads this)
+  events*.jsonl     audit log: every status change, alert fired, watchdog reload
+
+Both launcher pairs cd to the REPO ROOT (one level up from their own folder),
+so tracker.py, console_profile and the runtime state files all live together at
+the root and the two platforms share them without duplicating anything.
 
 TUNING (edit constants at top of tracker.py)
   DISPATCH_OVERDUE_MIN = 10    STANDSTILL_MIN = 10    STANDSTILL_RADIUS_M = 150
@@ -80,7 +99,7 @@ NOTES / LIMITS
   Salesforce. Volume impact on the org: zero extra requests.
 
 SETUP ON A NEW MACHINE (colleague install)
-ONE CLICK:  double-click  SETUP.bat
+ONE CLICK:  double-click  windows\SETUP.bat
   (installs Python 3.11 + Chrome if missing, pip packages, Start Menu
   shortcuts, then opens the console for first login — just log in with
   your own AAA credentials and you're done)
@@ -89,15 +108,17 @@ Manual steps, if you prefer:
 1. Install Python 3.11+ (python.org, tick "Add to PATH") and Google Chrome.
 2. Get this folder (git clone), then:
       pip install websockets
-3. Start the console Chrome (start_chrome.bat) and log in with YOUR OWN AAA
-   credentials. Each person runs their own tracker against their own console
-   session — the tracker only READS what your console receives.
-4. Start the tracker (start_tracker.bat) and open
+3. Start the console Chrome (windows\start_chrome.bat) and log in with YOUR OWN
+   AAA credentials. Each person runs their own tracker against their own
+   console session — the tracker only READS what your console receives.
+4. Start the tracker (windows\start_tracker.bat) and open
       http://127.0.0.1:8787/dashboard.html
 5. Windows toasts fire from tracker.py (fire_toast); no extra setup.
 
 SHARING / UPDATES
-- Code lives in git (github.com/musmushter/fsl-dispatch-tracker, private).
+- Code lives in git (github.com/musmushter/fsl-dispatch-tracker).
+- Layout: tracker.py / dashboard.html / tests.py at the root; platform files
+  under windows\ and linux\. Windows users only ever touch windows\.
 - Pull before your shift to get fixes:  git pull
 - state.json / events.jsonl / logs are local-only (gitignored) — your runtime
   data never mixes with anyone else's.
@@ -143,3 +164,36 @@ hear about alerts, the dashboard header has a 'Enable alerts' bell — they
 click it once, allow browser notifications, and get a popup per urgent
 alert (same text as the Windows toasts). Read-only: viewers cannot change
 anything; the link only exposes the dashboard, not your machine.
+
+LINUX (CachyOS / Arch, systemd)
+===============================
+Same tracker, same dashboard — only the launchers differ. Everything Linux is
+under linux\; tracker.py, dashboard.html and the runtime files stay at the root.
+
+Install once:
+    git clone <repo> && cd fsl_tracker
+    ./linux/install_linux.sh
+That creates .venv, installs websockets + tzdata, runs the regression suite,
+and installs the systemd user unit generated for this machine's path.
+
+Daily use:
+  1. ./linux/start_chrome.sh        # console browser; log in once, keep it OPEN
+  2. systemctl --user start fsl-tracker
+     (or ./linux/start_tracker.sh to run it in a terminal and watch the output)
+  3. http://127.0.0.1:8787/dashboard.html
+
+The unit restarts the tracker if it dies and logs to journald:
+    journalctl --user -u fsl-tracker -f
+To keep it running after logout:   sudo loginctl enable-linger $USER
+
+Browser: start_chrome.sh prefers a system chromium / google-chrome and falls
+back to the Hermes-bundled Chrome for Testing, resolved by glob so a Hermes
+update that renumbers it cannot break the launcher. It always launches its own
+dedicated, NON-default profile (console_profile) — that is what keeps Chrome
+136+ from demanding an "Allow remote debugging?" click on every attach. Do NOT
+instead point the tracker at a browser you enabled debugging on via
+chrome://inspect/#remote-debugging: that mode is popup-gated (Chrome asks on
+every attach and cannot be told to remember), so it cannot run unattended.
+
+Alerts on Linux use notify-send instead of Windows toasts (same text).
+Not yet ported to Linux: share_link (needs cloudflared) and diagnose.bat.

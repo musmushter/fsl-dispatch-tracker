@@ -1,5 +1,7 @@
 @echo off
-cd /d "%~dp0"
+REM this script lives in windows\; cd to the repo root one level up, where
+REM tracker.py and the runtime files live
+cd /d "%~dp0.."
 echo ============================================
 echo  FSL TRACKER - DIAGNOSTIC RUN
 echo  (this window stays open; copy ALL its text - or send diagnose_log.txt)

@@ -1,7 +1,7 @@
 @echo off
 REM Share the FSL tracker dashboard with a read-only link (no install needed
 REM for viewers; the link works from anywhere until this window is closed).
-REM Requires the tracker to be running (start_tracker.bat).
+REM Requires the tracker to be running (windows\start_tracker.bat).
 cd /d "%~dp0"
 echo ============================================
 echo  FSL Tracker - share link

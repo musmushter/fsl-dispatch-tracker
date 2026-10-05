@@ -5,7 +5,9 @@
 # Testing, then any system Chrome/Chromium) so a Hermes update that renumbers
 # ~/.hermes/tools/chromium-<N>/ cannot silently break the launcher.
 set -u
-cd "$(dirname "$(readlink -f "$0")")" || exit 1
+# this script lives in linux/; cd to the repo root one level up so the
+# $PWD-relative paths below (console_profile, console_chrome.log) stay correct
+cd "$(dirname "$(dirname "$(readlink -f "$0")")")" || exit 1
 
 PORT=9222
 PROFILE="$PWD/console_profile"
@@ -82,7 +84,7 @@ for i in $(seq 1 30); do
         echo
         echo "Debug port $PORT is UP (after ${i}s)."
         echo "Log in to the dispatch console in that window and KEEP IT OPEN."
-        echo "Then start the tracker:   ./start_tracker.sh"
+        echo "Then start the tracker:   ./linux/start_tracker.sh"
         exit 0
     fi
     sleep 1
