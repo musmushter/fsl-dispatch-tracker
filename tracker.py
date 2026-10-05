@@ -277,7 +277,7 @@ def parse_status_times_from_feed(body):
 # A Chromium-family browser exposes CDP one of two ways, and the tracker has to
 # handle BOTH:
 #  1. Launched with --remote-debugging-port (the Windows launcher, and
-#     start_chrome.sh): the DevTools HTTP server answers /json/version and
+#     linux/start.sh): the DevTools HTTP server answers /json/version and
 #     /json/list. Tried FIRST so the Windows flow is untouched.
 #  2. Enabled from chrome://inspect/#remote-debugging (the UI toggle): a
 #     websocket-ONLY server. It writes the port it chose into
@@ -295,6 +295,7 @@ CDP_PROFILE_DIR = os.environ.get("FSL_CHROME_PROFILE",
 # explicitly enabled — an unattended monitor must never drift into a mode that
 # needs someone sitting there clicking Allow.
 CDP_ALLOW_UI_DEBUGGING = os.environ.get("FSL_ALLOW_UI_DEBUGGING") == "1"
+_NO_BROWSER_WARNED = False
 
 
 def _devtools_active_port():
@@ -1580,21 +1581,31 @@ async def run():
 
     ws_url = cdp_browser_ws()
     if not ws_url:
-        print("=" * 60, flush=True)
-        print("CANNOT REACH THE CONSOLE BROWSER.", flush=True)
-        print("  tried http://127.0.0.1:%d/json/version" % CDP_HTTP_PORT, flush=True)
-        print("  tried %s/DevToolsActivePort" % CDP_PROFILE_DIR, flush=True)
-        if sys.platform == "win32":
-            print("Fix: double-click windows\\start_chrome.bat, then log in to", flush=True)
-            print("the dispatch console in that window. Keep it OPEN. Then", flush=True)
-            print("restart this tracker (windows\\start_tracker.bat).", flush=True)
-        else:
-            print("Fix: run ./linux/start_chrome.sh, then log in to the dispatch", flush=True)
-            print("console in that window. Keep it OPEN. Then restart this", flush=True)
-            print("tracker (./linux/start_tracker.sh, or:", flush=True)
-            print("systemctl --user restart fsl-tracker).", flush=True)
-        print("=" * 60, flush=True)
-        raise SystemExit(1)
+        # NOT SystemExit: SystemExit derives from BaseException, so the
+        # reconnect loop below (`except Exception`) would not catch it and the
+        # whole process would DIE every time the console browser restarts —
+        # leaving the board silently dark on any machine without systemd to
+        # restart it. Print the instructions once, then raise a normal error so
+        # the loop keeps retrying.
+        global _NO_BROWSER_WARNED
+        if not _NO_BROWSER_WARNED:
+            _NO_BROWSER_WARNED = True
+            print("=" * 60, flush=True)
+            print("CANNOT REACH THE CONSOLE BROWSER.", flush=True)
+            print("  tried http://127.0.0.1:%d/json/version" % CDP_HTTP_PORT, flush=True)
+            print("  tried %s/DevToolsActivePort" % CDP_PROFILE_DIR, flush=True)
+            if sys.platform == "win32":
+                print("Fix: double-click windows\\start_chrome.bat, then log in to", flush=True)
+                print("the dispatch console in that window. Keep it OPEN. Then", flush=True)
+                print("restart this tracker (windows\\start_tracker.bat).", flush=True)
+            else:
+                print("Fix: run ./linux/start.sh — it launches the browser with the", flush=True)
+                print("dispatch console and starts this tracker. Keep that window", flush=True)
+                print("OPEN.", flush=True)
+            print("=" * 60, flush=True)
+            print("Retrying every 5s — no action needed once it is back.", flush=True)
+        raise RuntimeError("console browser not reachable")
+    _NO_BROWSER_WARNED = False
 
     async with websockets.connect(ws_url, max_size=256 * 1024 * 1024,
                                   ping_interval=20) as ws:

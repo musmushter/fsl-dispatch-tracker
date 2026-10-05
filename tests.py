@@ -1,5 +1,5 @@
 """Regression tests for tracker alert logic + SF time encoding + ETA parser."""
-import json, time, importlib.util, sys, datetime as dt, re, os, tempfile
+import json, time, importlib.util, sys, datetime as dt, re, os, tempfile, asyncio
 from zoneinfo import ZoneInfo
 
 # derive paths from THIS file's location — works on any machine (Windows dev
@@ -1199,6 +1199,30 @@ try:
 except Exception:
     pass
 m.ACCOUNT_KEY = _oldkey40
+
+# ---- T41: a missing console browser must be RETRYABLE, not fatal ----
+# SystemExit derives from BaseException, so the reconnect loop's
+# `except Exception` never caught it: the process DIED every time the console
+# browser went away (observed live: systemd logged 'Main process exited,
+# code=exited, status=1/FAILURE'), leaving the board dark on any machine
+# without a supervisor to restart it. run() must raise an ordinary Exception.
+_orig_bws = m.cdp_browser_ws
+m.cdp_browser_ws = lambda: None
+_raised = None
+try:
+    asyncio.run(m.run())
+except BaseException as _e:      # deliberately broad: we assert on the TYPE
+    _raised = _e
+finally:
+    m.cdp_browser_ws = _orig_bws
+check("T41a no console browser raises, rather than returning silently",
+      _raised is not None,
+      f"-> {type(_raised).__name__ if _raised else 'nothing raised'}")
+check("T41b it is NOT SystemExit (the reconnect loop cannot catch that)",
+      _raised is not None and not isinstance(_raised, SystemExit),
+      f"-> {type(_raised).__name__ if _raised else 'nothing raised'}")
+check("T41c it IS an Exception, so `except Exception` retries it",
+      isinstance(_raised, Exception))
 
 
 # Summary LAST: any check placed after this point runs UNCOUNTED and the

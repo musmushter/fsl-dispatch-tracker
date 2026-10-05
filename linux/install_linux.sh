@@ -24,8 +24,8 @@ echo "-- installing dependencies (websockets, tzdata)"
 "$DIR/.venv/bin/python" -m pip install --quiet websockets tzdata
 "$DIR/.venv/bin/python" -c "import websockets, tzdata" && echo "   deps OK"
 
-# ---- 2. launchers ----
-chmod +x "$DIR/linux/start_chrome.sh" "$DIR/linux/start_tracker.sh"
+# ---- 2. launcher ----
+chmod +x "$DIR/linux/start.sh"
 
 # ---- 3. regression suite ----
 echo "-- running regression suite"
@@ -49,9 +49,9 @@ echo "-- service installed: $UNIT_DIR/fsl-tracker.service"
 
 echo
 echo "Next steps:"
-echo "  1. ./linux/start_chrome.sh            # log in to the dispatch console"
-echo "  2. systemctl --user enable --now fsl-tracker"
-echo "  3. open http://127.0.0.1:8787/dashboard.html"
+echo "  1. ./linux/start.sh                    # browser + console + tracker + dashboard"
+echo "  2. log in to the dispatch console tab if it asks"
+echo "  3. (optional) systemctl --user enable fsl-tracker   # start at login"
 echo
 echo "Logs:    journalctl --user -u fsl-tracker -f"
 echo "Survive logout (recommended):  sudo loginctl enable-linger $USER"

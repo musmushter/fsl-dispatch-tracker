@@ -46,8 +46,7 @@ FILES
       tools\cloudflared.exe   the tunnel share_link.bat uses
   linux\            everything Linux-only
       install_linux.sh        one-shot install: venv + deps + tests + service
-      start_chrome.sh         console browser launcher
-      start_tracker.sh        tracker launcher (foreground, pauses on exit)
+      start.sh                browser + console + tracker + dashboard, in one go
       fsl-tracker.service.in  systemd user unit template
   state*.json       current snapshot (dashboard reads this)
   events*.jsonl     audit log: every status change, alert fired, watchdog reload
@@ -176,17 +175,18 @@ Install once:
 That creates .venv, installs websockets + tzdata, runs the regression suite,
 and installs the systemd user unit generated for this machine's path.
 
-Daily use:
-  1. ./linux/start_chrome.sh        # console browser; log in once, keep it OPEN
-  2. systemctl --user start fsl-tracker
-     (or ./linux/start_tracker.sh to run it in a terminal and watch the output)
-  3. http://127.0.0.1:8787/dashboard.html
+Daily use — one command does all of it:
+    ./linux/start.sh
+It reuses a browser already listening on :9222, a console tab already open, and
+a tracker already serving :8787 — running it twice changes nothing. Then it
+opens the dashboard as a tab in that same browser window. Keep the window OPEN
+during your shift (minimizing is fine).
 
 The unit restarts the tracker if it dies and logs to journald:
     journalctl --user -u fsl-tracker -f
 To keep it running after logout:   sudo loginctl enable-linger $USER
 
-Browser: start_chrome.sh prefers a system chromium / google-chrome and falls
+Browser: start.sh prefers a system chromium / google-chrome and falls
 back to the Hermes-bundled Chrome for Testing, resolved by glob so a Hermes
 update that renumbers it cannot break the launcher. It always launches its own
 dedicated, NON-default profile (console_profile) — that is what keeps Chrome
