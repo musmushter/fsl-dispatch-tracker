@@ -22,21 +22,29 @@ fail() {
 }
 
 # ---- resolve a Chrome-family binary: newest bundled first, then system ----
-CHROME=""; best=-1
-for c in "$HOME"/.hermes/tools/chromium-*/chrome-linux64/chrome; do
-    [ -x "$c" ] || continue
-    v=$(basename "$(dirname "$(dirname "$c")")"); v=${v#chromium-}
-    case "$v" in ''|*[!0-9]*) continue ;; esac
-    if [ "$v" -gt "$best" ]; then best=$v; CHROME=$c; fi
-done
+# Preference: $FSL_CHROME override > system Chromium/Chrome > newest bundled
+# Chrome for Testing. System chromium wins because its path is stable
+# (/usr/bin/chromium), it updates with the OS, and it carries no "Chrome for
+# Testing" branding; the bundled CfT sits at a version-numbered path that a
+# Hermes update can renumber or delete and never receives security updates.
+CHROME="${FSL_CHROME:-}"
 if [ -z "$CHROME" ]; then
     for c in chromium chromium-browser google-chrome-stable google-chrome brave-browser; do
         if command -v "$c" >/dev/null 2>&1; then CHROME=$(command -v "$c"); break; fi
     done
 fi
+if [ -z "$CHROME" ]; then
+    best=-1
+    for c in "$HOME"/.hermes/tools/chromium-*/chrome-linux64/chrome; do
+        [ -x "$c" ] || continue
+        v=$(basename "$(dirname "$(dirname "$c")")"); v=${v#chromium-}
+        case "$v" in ''|*[!0-9]*) continue ;; esac
+        if [ "$v" -gt "$best" ]; then best=$v; CHROME=$c; fi
+    done
+fi
 [ -n "$CHROME" ] || fail "no Chrome or Chromium found on this machine." \
-    "Checked ~/.hermes/tools/chromium-*/chrome-linux64/chrome and the usual" \
-    "system names. Install one with:  sudo pacman -S chromium"
+    "Checked the usual system names and ~/.hermes/tools/chromium-*/chrome-linux64/chrome." \
+    "Install one with:  sudo pacman -S chromium"
 echo "Using: $CHROME"
 
 # ---- refuse to double-launch: an existing instance ignores our flags ----

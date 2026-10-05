@@ -271,20 +271,129 @@ def parse_status_times_from_feed(body):
     return out, reassigned
 
 
+# ---------------- CDP endpoint discovery ----------------
+# A Chromium-family browser exposes CDP one of two ways, and the tracker has to
+# handle BOTH:
+#  1. Launched with --remote-debugging-port (the Windows launcher, and
+#     start_chrome.sh): the DevTools HTTP server answers /json/version and
+#     /json/list. Tried FIRST so the Windows flow is untouched.
+#  2. Enabled from chrome://inspect/#remote-debugging (the UI toggle): a
+#     websocket-ONLY server. It writes the port it chose into
+#     <profile>/DevToolsActivePort, but EVERY /json/* path returns 404 — so
+#     target discovery must go through the browser websocket
+#     (Target.getTargets) and page URLs are built as /devtools/page/<targetId>.
+# The UI-toggle port is random per session, hence read from the file rather
+# than hardcoded. Override the profile dir with FSL_CHROME_PROFILE.
+CDP_HTTP_PORT = 9222
+CDP_PROFILE_DIR = os.environ.get("FSL_CHROME_PROFILE",
+                                 os.path.expanduser("~/.config/chromium"))
+# The chrome://inspect fallback is POPUP-GATED: Chrome 144+ demands a human
+# click on EVERY attach and cannot be made to remember the choice, and the
+# consent blocks the websocket handshake itself. It therefore stays OFF unless
+# explicitly enabled — an unattended monitor must never drift into a mode that
+# needs someone sitting there clicking Allow.
+CDP_ALLOW_UI_DEBUGGING = os.environ.get("FSL_ALLOW_UI_DEBUGGING") == "1"
+
+
+def _devtools_active_port():
+    """(port, browser_ws_path) from <profile>/DevToolsActivePort, or (None, None)."""
+    if not CDP_ALLOW_UI_DEBUGGING:
+        return None, None
+    try:
+        with open(os.path.join(CDP_PROFILE_DIR, "DevToolsActivePort"),
+                  encoding="utf-8") as f:
+            lines = [l.strip() for l in f.read().split("\n") if l.strip()]
+        if len(lines) >= 2 and lines[0].isdigit():
+            return int(lines[0]), lines[1]
+    except Exception:
+        pass
+    return None, None
+
+
+def cdp_browser_ws():
+    """Browser-level CDP websocket URL, or None if no browser is reachable."""
+    try:
+        with urllib.request.urlopen(
+                "http://127.0.0.1:%d/json/version" % CDP_HTTP_PORT, timeout=5) as r:
+            ws_url = json.load(r)["webSocketDebuggerUrl"]
+        # force 127.0.0.1: 'localhost' may resolve to ::1 where Chrome only
+        # listens on IPv4 -> endless reconnect loop
+        return re.sub(r"//localhost:", "//127.0.0.1:", ws_url)
+    except Exception:
+        pass
+    port, path = _devtools_active_port()
+    if port and path:
+        return "ws://127.0.0.1:%d%s" % (port, path)
+    return None
+
+
+def _page_from_http(needle):
+    """(ws_url, page_url) via the /json/list HTTP endpoint, or (None, None)."""
+    try:
+        targets = json.loads(urllib.request.urlopen(
+            "http://127.0.0.1:%d/json/list" % CDP_HTTP_PORT, timeout=5).read())
+    except Exception:
+        return None, None
+    page = next((t for t in targets if t.get("type") == "page"
+                 and needle in t.get("url", "")), None)
+    if not page:
+        return None, None
+    return page.get("webSocketDebuggerUrl"), page.get("url")
+
+
+async def _page_via_browser_ws(needle):
+    """(ws_url, page_url) via Target.getTargets on the browser websocket."""
+    port, path = _devtools_active_port()
+    if not (port and path):
+        return None, None
+    import websockets as _w
+    async with _w.connect("ws://127.0.0.1:%d%s" % (port, path),
+                          max_size=16 * 1024 * 1024, open_timeout=10) as bws:
+        await bws.send(json.dumps({"id": 1, "method": "Target.getTargets"}))
+        while True:
+            m = json.loads(await asyncio.wait_for(bws.recv(), timeout=10))
+            if m.get("id") == 1:
+                for t in m.get("result", {}).get("targetInfos", []):
+                    if t.get("type") == "page" and needle in t.get("url", ""):
+                        return ("ws://127.0.0.1:%d/devtools/page/%s"
+                                % (port, t["targetId"]), t.get("url"))
+                return None, None
+
+
+def cdp_page_ws(needle="dispatch-console"):
+    """(ws_url, page_url) of the console page target. Blocking, sync-safe."""
+    ws, url = _page_from_http(needle)
+    if ws:
+        return ws, url
+    try:
+        return asyncio.run(_page_via_browser_ws(needle))
+    except Exception:
+        return None, None
+
+
+async def cdp_page_ws_async(needle="dispatch-console"):
+    """Same, but awaitable from inside the running event loop."""
+    ws, url = await asyncio.get_running_loop().run_in_executor(
+        None, lambda: _page_from_http(needle))
+    if ws:
+        return ws, url
+    try:
+        return await _page_via_browser_ws(needle)
+    except Exception:
+        return None, None
+
+
 # ---------------- page-context fetch (module level, for HTTP-thread use) ----
 def fetch_page_text(url_path, timeout=25):
     """Fetch a relative console URL through the console tab's own session.
     Blocking; safe to call from the HTTP server thread."""
     import websockets as _w
-    targets = json.loads(urllib.request.urlopen(
-        "http://127.0.0.1:9222/json/list", timeout=5).read())
-    page = next((t for t in targets if t.get("type") == "page"
-                 and "dispatch-console" in t.get("url", "")), None)
-    if not page or "/login" in page.get("url", ""):
+    ws_target, page_url = cdp_page_ws()
+    if not ws_target or "/login" in (page_url or ""):
         return None
 
     async def _run():
-        async with _w.connect(page["webSocketDebuggerUrl"],
+        async with _w.connect(ws_target,
                               max_size=20 * 1024 * 1024) as tws:
             expr = ("(async () => { const r = await fetch(" + json.dumps(url_path) +
                     ", {credentials:'include'}); return await r.text(); })()")
@@ -713,6 +822,25 @@ class State:
     # ---------- account scoping ----------
     TERR_RE = re.compile(r'"ServiceTerritoryId"\s*:\s*"(0Hh[0-9A-Za-z]{12,15})"')
 
+    def _scope_events(self):
+        """Point the audit-log handle at the account-scoped file.
+
+        Called on BOTH the first account detection and a later switch. The
+        first-load branch used to `return` before reaching the reopen, so the
+        handle stayed on the legacy events.jsonl for the whole process while
+        state.json was already scoped — the audit trail silently split across
+        two files. Tolerates synthetic test states (no events_fh)."""
+        fh = getattr(self, "events_fh", None)
+        if fh is not None:
+            try:
+                fh.close()
+            except Exception:
+                pass
+        try:
+            self.events_fh = open(current_paths()["events"], "a", encoding="utf-8")
+        except Exception as e:
+            print("events file scope failed:", e, flush=True)
+
     def detect_account(self, raw):
         """Account = the LOGIN, not any single territory: a team's gantt spans
         several territories (631252 HOUSTON EMERGENCY, 631268 ALL AMERICAN, ...),
@@ -729,6 +857,7 @@ class State:
             self.terr_set = set()
             self.terr_set = terrs
             ACCOUNT_KEY = sorted(terrs)[0][:15]
+            self._scope_events()   # first load must scope too, not just switches
             return
         if terrs & self.terr_set:
             # overlap -> same account; adopt any new territories
@@ -753,12 +882,7 @@ class State:
         first = ACCOUNT_KEY is None
         ACCOUNT_KEY = sorted(terrs)[0][:15]
         self.terr_set = set(terrs)   # fresh account -> fresh territory set
-        # close old events handle, open the scoped one
-        try:
-            self.events_fh.close()
-        except Exception:
-            pass
-        self.events_fh = open(current_paths()["events"], "a", encoding="utf-8")
+        self._scope_events()
         # reset memory so nothing crosses accounts
         self.services.clear()
         self.drivers.clear()
@@ -1415,24 +1539,22 @@ async def run():
     sessions = {}
     req_meta = {}
 
-    try:
-        with urllib.request.urlopen("http://127.0.0.1:9222/json/version",
-                                    timeout=5) as r:
-            ws_url = json.load(r)["webSocketDebuggerUrl"]
-        # force 127.0.0.1: 'localhost' may resolve to ::1 where Chrome only
-        # listens on IPv4 -> endless reconnect loop
-        ws_url = re.sub(r"//localhost:", "//127.0.0.1:", ws_url)
-    except Exception:
+    ws_url = cdp_browser_ws()
+    if not ws_url:
         print("=" * 60, flush=True)
-        print("CANNOT REACH THE CONSOLE CHROME on port 9222.", flush=True)
+        print("CANNOT REACH THE CONSOLE BROWSER.", flush=True)
+        print("  tried http://127.0.0.1:%d/json/version" % CDP_HTTP_PORT, flush=True)
+        print("  tried %s/DevToolsActivePort" % CDP_PROFILE_DIR, flush=True)
         if sys.platform == "win32":
             print("Fix: double-click start_chrome.bat, then log in to the", flush=True)
             print("dispatch console in that window. Keep it OPEN. Then", flush=True)
             print("restart this tracker (start_tracker.bat).", flush=True)
         else:
-            print("Fix: run ./start_chrome.sh, then log in to the dispatch", flush=True)
-            print("console in that window. Keep it OPEN. Then restart this", flush=True)
-            print("tracker (./start_tracker.sh, or: systemctl --user restart fsl-tracker).", flush=True)
+            print("Fix: open the dispatch console in your browser and KEEP THE", flush=True)
+            print("WINDOW OPEN (a minimized/closed window stalls the endpoint).", flush=True)
+            print("Enable debugging at chrome://inspect/#remote-debugging —", flush=True)
+            print("that writes DevToolsActivePort. Then restart this tracker", flush=True)
+            print("(./start_tracker.sh, or: systemctl --user restart fsl-tracker).", flush=True)
         print("=" * 60, flush=True)
         raise SystemExit(1)
 
@@ -1581,16 +1703,9 @@ async def run():
             """Fetch a relative feed URL through the console tab's own session
             (Runtime.evaluate + fetch, same-origin, cookies included)."""
             try:
-                targets = json.loads(await asyncio.get_running_loop().run_in_executor(
-                    None, lambda: urllib.request.urlopen(
-                        "http://127.0.0.1:9222/json/list", timeout=5).read()))
-                page = next((t for t in targets if t.get("type") == "page"
-                             and "dispatch-console" in t.get("url", "")), None)
-                if not page or "/login" in page.get("url", ""):
+                ws_target, page_url = await cdp_page_ws_async()
+                if not ws_target or "/login" in (page_url or ""):
                     state.login_required = True
-                    return None
-                ws_target = page.get("webSocketDebuggerUrl")
-                if not ws_target:
                     return None
                 import websockets as _w
                 async with _w.connect(ws_target, max_size=20 * 1024 * 1024) as tws:
@@ -1861,12 +1976,12 @@ async def run():
                     await asyncio.sleep(30)
 
         async def reload_console():
-            try:
-                with urllib.request.urlopen("http://127.0.0.1:9222/json/list",
-                                            timeout=5) as r:
-                    targets = json.load(r)
-            except Exception:
-                return False
+            # discovery handles BOTH the /json/list HTTP endpoint and the
+            # websocket-only chrome://inspect toggle; normalise to a single
+            # entry so the loop below stays unchanged
+            _ws, _url = await cdp_page_ws_async()
+            targets = ([{"type": "page", "url": _url,
+                         "webSocketDebuggerUrl": _ws}] if _ws else [])
             for t in targets:
                 if (t.get("type") == "page"
                         and "dispatch-console" in t.get("url", "")):
@@ -1967,15 +2082,11 @@ async def run():
                         "credentials:'include', headers:{'Content-Type':'application/json'},"
                         "body: " + json.dumps(json.dumps(payload)) + "});"
                         "return await r.text(); })()")
-                targets = json.loads(await asyncio.get_running_loop().run_in_executor(
-                    None, lambda: urllib.request.urlopen(
-                        "http://127.0.0.1:9222/json/list", timeout=5).read()))
-                page = next((t for t in targets if t.get("type") == "page"
-                             and "dispatch-console" in t.get("url", "")), None)
-                if not page or "/login" in page.get("url", ""):
+                page_ws, page_url = await cdp_page_ws_async()
+                if not page_ws or "/login" in (page_url or ""):
                     return None
                 import websockets as _w
-                async with _w.connect(page["webSocketDebuggerUrl"],
+                async with _w.connect(page_ws,
                                       max_size=20 * 1024 * 1024) as tws:
                     await tws.send(json.dumps({"id": 7, "method": "Runtime.evaluate",
                                                "params": {"expression": expr,
