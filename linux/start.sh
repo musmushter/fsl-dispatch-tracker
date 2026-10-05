@@ -28,6 +28,7 @@ fail() { echo; echo "ERROR: $1"; shift
 cdp_up()  { curl -s --max-time 3 "http://127.0.0.1:$CDP_PORT/json/version" >/dev/null 2>&1; }
 dash_up() { curl -s --max-time 3 "http://127.0.0.1:$DASH_PORT/dashboard.html" >/dev/null 2>&1; }
 pages()   { curl -s --max-time 5 "http://127.0.0.1:$CDP_PORT/json/list" 2>/dev/null; }
+PY="$ROOT/.venv/bin/python"
 
 # Keep you signed in across browser restarts.
 #
@@ -134,20 +135,35 @@ fi
 
 # ---------------- 2. dispatch console ----------------
 echo "== 2/4 dispatch console =="
-if pages | grep -q 's/dispatch-console"'; then
-    say "console tab already open"
+if pages | grep -q 'dispatch-console'; then
+    # Match the BROAD 'dispatch-console'. A console tab sitting on the login
+    # redirect is still a console tab; matching only the signed-in URL made
+    # this open a brand new tab on every run, and they piled up.
+    if pages | grep -q 's/dispatch-console"'; then
+        say "console tab already open"
+    else
+        say "console tab open (showing the login page)"
+    fi
 else
     say "console tab not loaded — opening it"
     curl -s -X PUT --max-time 10 "http://127.0.0.1:$CDP_PORT/json/new?$CONSOLE_URL" \
         >/dev/null 2>&1 || say "could not open it via CDP (open it by hand)"
     sleep 3
 fi
-# Only the CONSOLE being on a login redirect is worth warning about. A
-# persistent login.salesforce.com helper tab is always present and means
-# nothing, so match the redirect's own startURL, not the bare word 'login'.
+# On the login page: surface the tab and TICK 'Remember me'.
+#
+# #rememberUn is a plain boolean with no credentials in it, and it is what
+# makes Salesforce issue a PERSISTENT session cookie. Left unticked the session
+# dies with the browser, no matter what Chromium does with its cookie store.
+#
+# Deliberately NOT auto-submitting the form. Chrome withholds an autofilled
+# password from scripts (input.value reads empty while the field is visibly
+# filled), so we cannot confirm a synthetic click would carry it — and a click
+# that didn't would count as a FAILED login, which repeated can lock the
+# account. Signing in stays a human action; this just removes the friction.
 if pages | grep -q 'login?[^"]*dispatch-console'; then
     say "console needs a sign-in — bringing that tab to the front"
-    TID=$(pages | "$ROOT/.venv/bin/python" -c "
+    TID=$(pages | "$PY" -c "
 import json,sys
 try:
     for t in json.load(sys.stdin):
@@ -158,8 +174,46 @@ except Exception:
 " 2>/dev/null)
     [ -n "${TID:-}" ] && curl -s --max-time 5 \
         "http://127.0.0.1:$CDP_PORT/json/activate/$TID" >/dev/null 2>&1
-    say "sign in there. Tick 'Remember me' and the session then survives"
-    say "browser restarts, so this should be rare."
+    if [ -x "$PY" ]; then
+        "$PY" - "$CDP_PORT" <<'PYEOF' 2>/dev/null
+import asyncio, json, sys, urllib.request, websockets
+port = sys.argv[1] if len(sys.argv) > 1 else "9222"
+try:
+    pages = json.load(urllib.request.urlopen(
+        f"http://127.0.0.1:{port}/json/list", timeout=5))
+except Exception:
+    sys.exit(0)
+tab = next((t for t in pages if t.get("type") == "page"
+            and "dispatch-console" in t.get("url", "")), None)
+if not tab:
+    sys.exit(0)
+JS = ("(() => { const c = document.querySelector('#rememberUn');"
+      " if (!c) return 'no-checkbox';"
+      " if (c.checked) return 'already-on';"
+      " c.click(); return c.checked ? 'ticked' : 'failed'; })()")
+async def go():
+    async with websockets.connect(tab["webSocketDebuggerUrl"],
+                                  open_timeout=8) as ws:
+        await ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate",
+                                  "params": {"expression": JS,
+                                             "returnByValue": True}}))
+        while True:
+            m = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
+            if m.get("id") == 1:
+                v = (m.get("result", {}).get("result", {}) or {}).get("value")
+                if v == "ticked":
+                    print("   Remember me: ticked (makes the session persist)")
+                elif v == "already-on":
+                    print("   Remember me: already on")
+                return
+try:
+    asyncio.run(go())
+except Exception:
+    pass
+PYEOF
+    fi
+    say "sign in there — 'Remember me' is set, so the session should survive"
+    say "browser restarts."
 fi
 
 # ---------------- 3. tracker ----------------
