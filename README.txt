@@ -48,6 +48,8 @@ FILES
       install_linux.sh        one-shot install: venv + deps + tests + service
       start.sh                browser + console + tracker + dashboard, in one go
       share_link.sh           temporary public share link (see LINUX below)
+      share_link_terminal.sh  entry point the desktop launcher runs
+      fsl-share.desktop.in    template for the 'FSL Tracker - Share Link' launcher
       fsl-tracker.service.in  systemd user unit template
   state*.json       current snapshot (dashboard reads this)
   events*.jsonl     audit log: every status change, alert fired, watchdog reload
@@ -229,6 +231,14 @@ linux\tools\cloudflared (about 40 MB; gitignored, and never needed again). The
 link can take a minute or two to become reachable while its DNS record is
 created, so the script waits and tells you when it is safe to send. Closing the
 window (or Ctrl-C) tears the tunnel down; the link then returns 530.
+
+For the Windows habit of double-clicking share_link.bat and reading the link out
+of the window that opens, use the installed launcher rather than a terminal:
+install_linux.sh generates 'FSL Tracker - Share Link' into the application menu
+(~/.local/share/applications/fsl-share.desktop) and, when ~/Desktop exists, onto
+the Desktop as well. Opening it starts konsole on the same script, so that
+window IS the link — closing it ends the tunnel. Unlike a .bat, if the script
+fails the window stays open so you can read the reason.
 
 The same warning as Windows applies on Linux: the link reaches tracker.py's
 HTTP routes, and POST /settings is deliberately unauthenticated, so share it
