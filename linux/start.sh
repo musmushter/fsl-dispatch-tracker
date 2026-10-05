@@ -144,6 +144,42 @@ except Exception:
     return 1
 }
 
+# Chromium puts up a blank 'chrome://newtab/' when the session restore brings
+# nothing back, so a launch from closed tabs left you with the console, the
+# dashboard AND that empty new tab. Close the empty one.
+#
+# Guard: only act when BOTH real tabs are present. That way this can never close
+# the browser's last tab (which would quit it) nor a console tab that is briefly
+# blank while it loads.
+close_blank_tabs() {
+    pages | "$PY" -c "
+import json,sys
+try:
+    ts = [t for t in json.load(sys.stdin) if t.get('type') == 'page']
+except Exception:
+    ts = []
+urls = [t.get('url','') for t in ts]
+if not any('dispatch-console' in u for u in urls):
+    sys.exit(0)
+if not any('8787/dashboard' in u for u in urls):
+    sys.exit(0)
+def blank(t):
+    u = t.get('url','')
+    return ((not u) or u == 'about:blank'
+            or u.startswith('chrome://newtab')
+            or u.startswith('chrome://new-tab-page')
+            or t.get('title') == 'New Tab')
+for t in ts:
+    if blank(t):
+        print(t['id'])
+" 2>/dev/null | while read -r id; do
+        [ -n "$id" ] || continue
+        curl -s --max-time 5 "http://127.0.0.1:$CDP_PORT/json/close/$id" >/dev/null 2>&1 \
+            && say "closed the leftover empty tab"
+    done
+    return 0
+}
+
 echo "FSL tracker — starting up"
 
 # ---------------- 1. console browser ----------------
@@ -332,6 +368,9 @@ fi
 # ---------------- 4. dashboard tab ----------------
 echo "== 4/4 dashboard =="
 open_dashboard
+
+# Now that both real tabs are up, drop any leftover empty new tab.
+close_blank_tabs
 
 echo
 echo "Ready. Console + dashboard are tabs in the same browser window."
