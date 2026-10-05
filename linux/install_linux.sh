@@ -25,25 +25,7 @@ echo "-- installing dependencies (websockets, tzdata)"
 "$DIR/.venv/bin/python" -c "import websockets, tzdata" && echo "   deps OK"
 
 # ---- 2. launchers ----
-chmod +x "$DIR/linux/start.sh" "$DIR/linux/share_link.sh" \
-         "$DIR/linux/share_link_terminal.sh"
-
-# Desktop entry, generated with THIS machine's real path — the same rule as the
-# systemd unit below, and as the Windows SETUP.ps1 rewriting its .bats. It lands
-# in the application menu (Terminal=true opens konsole and shows the link), and
-# in ~/Desktop too when that folder exists, so it can simply be double-clicked
-# the way windows\share_link.bat is.
-APPS="$HOME/.local/share/applications"
-mkdir -p "$APPS"
-sed "s|@ROOT@|$DIR|g" "$DIR/linux/fsl-share.desktop.in" > "$APPS/fsl-share.desktop"
-chmod +x "$APPS/fsl-share.desktop"
-if [ -d "$HOME/Desktop" ]; then
-    cp "$APPS/fsl-share.desktop" "$HOME/Desktop/fsl-share.desktop"
-    chmod +x "$HOME/Desktop/fsl-share.desktop"
-fi
-command -v update-desktop-database >/dev/null 2>&1 \
-    && update-desktop-database "$APPS" >/dev/null 2>&1
-echo "   launcher: $APPS/fsl-share.desktop  (menu: 'FSL Tracker - Share Link')"
+chmod +x "$DIR/linux/start.sh" "$DIR/linux/share_link.sh"
 
 # ---- 3. regression suite ----
 echo "-- running regression suite"

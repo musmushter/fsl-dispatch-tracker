@@ -47,9 +47,7 @@ FILES
   linux\            everything Linux-only
       install_linux.sh        one-shot install: venv + deps + tests + service
       start.sh                browser + console + tracker + dashboard, in one go
-      share_link.sh           temporary public share link (see LINUX below)
-      share_link_terminal.sh  entry point the desktop launcher runs
-      fsl-share.desktop.in    template for the 'FSL Tracker - Share Link' launcher
+      share_link.sh           share from a terminal (see SHARING below)
       fsl-tracker.service.in  systemd user unit template
   state*.json       current snapshot (dashboard reads this)
   events*.jsonl     audit log: every status change, alert fired, watchdog reload
@@ -223,32 +221,33 @@ every attach and cannot be told to remember), so it cannot run unattended.
 
 Alerts on Linux use notify-send instead of Windows toasts (same text).
 
-Sharing: ./linux/share_link.sh is the counterpart of windows\share_link.bat —
-a quick Cloudflare tunnel and a temporary trycloudflare.com link, printed and
-copied to the clipboard if a clipboard tool is installed. It uses a system
-cloudflared if you have one, otherwise it downloads the static binary once into
-linux\tools\cloudflared (about 40 MB; gitignored, and never needed again). The
-link can take a minute or two to become reachable while its DNS record is
-created, so the script waits and tells you when it is safe to send. Closing the
-window (or Ctrl-C) tears the tunnel down; the link then returns 530.
+SHARING: use the Share button in the dashboard header (next to Settings). Same
+on both platforms. It opens a small panel with Create link / Copy link / Close
+share:
 
-For the Windows habit of double-clicking share_link.bat and reading the link out
-of the window that opens, use the installed launcher rather than a terminal:
-install_linux.sh generates 'FSL Tracker - Share Link' into the application menu
-(~/.local/share/applications/fsl-share.desktop) and, when ~/Desktop exists, onto
-the Desktop as well. Opening it starts konsole on the same script, so that
-window IS the link — closing it ends the tunnel. Unlike a .bat, if the script
-fails the window stays open so you can read the reason.
+  - the TRACKER starts a Cloudflare quick tunnel and shows the public
+    trycloudflare.com link; Copy link puts it on your clipboard;
+  - cloudflared is a CHILD of the tracker process, so STOPPING THE TRACKER
+    CLOSES THE LINK — a share link cannot outlive the tracker;
+  - the link can take a minute or two to become reachable while its DNS record
+    is created; the panel says whether it is live or still starting;
+  - a viewer reading the board THROUGH the link gets no share controls:
+    /share reports local=false for anything arriving via the tunnel, and
+    /share/start + /share/stop are refused (403) for those requests.
 
-Either way the tunnel is tied to whatever opened it: it also shuts down if that
-terminal disappears or the launcher process goes away, so a link cannot quietly
-keep publishing your board after you have closed everything. (That is not
-hypothetical — an unattended tunnel was found still serving the real dashboard
-with no window anywhere.) Set FSL_SHARE_KEEP=1 only if you deliberately want a
-link to outlive its window.
+cloudflared must be present: a system cloudflared, else the repo's own copy
+(linux\tools\cloudflared). If the panel says 'cloudflared not found', run
+./linux/share_link.sh once — it downloads the static binary into linux\tools\.
+$FSL_CLOUDFLARED overrides the lookup.
 
-The same warning as Windows applies on Linux: the link reaches tracker.py's
-HTTP routes, and POST /settings is deliberately unauthenticated, so share it
-only with people you would let change the alert settings.
+The CLI equivalent, ./linux/share_link.sh (windows\share_link.bat on Windows),
+starts the same quick tunnel from a terminal instead, independent of the
+tracker. It ties the tunnel to that window: closing it (or Ctrl-C) ends the
+link, and it also exits if the launcher it was started from goes away, so a link
+cannot quietly keep publishing your board. FSL_SHARE_KEEP=1 opts out of that.
+
+Same warning as Windows: the link reaches tracker.py's HTTP routes, and
+POST /settings (the alert preferences) is deliberately unauthenticated, so any
+viewer can change them. Share only with people you would let do that.
 
 Not yet ported to Linux: diagnose.bat.

@@ -22,6 +22,9 @@ import sys
 import time
 import traceback
 import urllib.request
+import threading
+import atexit
+import shutil
 
 import websockets
 
@@ -1569,6 +1572,141 @@ $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
         print("toast failed:", e, flush=True)
 
 
+# ---------------- share link (cloudflared quick tunnel) ----------------
+# A temporary public link to this dashboard, driven from the dashboard's own
+# Share button. cloudflared is a CHILD of this process, so stopping the tracker
+# takes the tunnel down with it — a share link can never outlive the tracker.
+# That process relationship is the whole reason this lives here rather than in a
+# launcher script.
+#
+# start/stop are REFUSED for requests that arrived through the tunnel, so a
+# viewer holding the link cannot open or kill your tunnel; they get /share with
+# local=false and the dashboard hides the controls. cloudflared reaches this
+# server from 127.0.0.1, so a source-address test would be useless — the
+# Cloudflare-added headers are the only usable signal.
+SHARE: dict = {"proc": None, "url": None, "error": None, "started": None}
+SHARE_LOCK = threading.Lock()
+
+
+def share_cloudflared():
+    """Locate cloudflared: $FSL_CLOUDFLARED, then PATH, then the repo's own copy."""
+    env = os.environ.get("FSL_CLOUDFLARED")
+    if env and os.path.exists(env):
+        return env
+    found = shutil.which("cloudflared")
+    if found:
+        return found
+    exe = "cloudflared.exe" if sys.platform == "win32" else "cloudflared"
+    for folder in ("windows", "linux"):
+        p = os.path.join(BASE, folder, "tools", exe)
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def share_from_tunnel(headers):
+    """True when this request arrived through the share link.
+
+    cloudflared reaches this server from 127.0.0.1, so the source address cannot
+    distinguish a viewer from a local one — Cloudflare's own added headers can.
+    """
+    return bool(headers.get("CF-Connecting-IP") or headers.get("X-Forwarded-IP")
+                or headers.get("X-Forwarded-For"))
+
+
+def share_command(cf):
+    """argv for the quick tunnel. Split out so tests can substitute a fake."""
+    return [cf, "tunnel", "--url", "http://127.0.0.1:8787", "--no-autoupdate"]
+
+
+def _share_status_locked():
+    proc = SHARE.get("proc")
+    active = bool(proc) and proc.poll() is None
+    return {"active": active,
+            "url": SHARE.get("url") if active else None,
+            "error": SHARE.get("error"),
+            "started": SHARE.get("started") if active else None}
+
+
+def share_status():
+    with SHARE_LOCK:
+        return _share_status_locked()
+
+
+def _share_reader(proc):
+    """cloudflared reports the public url on its log, not over a pipe protocol."""
+    tail = []
+    try:
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            tail.append(line)
+            del tail[:-10]
+            if SHARE.get("url") is None:
+                m = re.search(r"https://[a-z0-9][a-z0-9-]*\.trycloudflare\.com", line)
+                if m:
+                    with SHARE_LOCK:
+                        SHARE["url"] = m.group(0)
+    except Exception:
+        pass
+    with SHARE_LOCK:
+        if SHARE.get("proc") is proc:
+            code = proc.poll()
+            SHARE["proc"] = None
+            SHARE["url"] = None
+            SHARE["started"] = None
+            if code not in (0, None):
+                SHARE["error"] = "cloudflared exited (%s): %s" % (
+                    code, (tail[-1][:200] if tail else "no output"))
+
+
+def share_start():
+    with SHARE_LOCK:
+        proc = SHARE.get("proc")
+        if proc and proc.poll() is None:
+            return _share_status_locked()
+        cf = share_cloudflared()
+        if not cf:
+            return {"active": False, "url": None, "started": None,
+                    "error": "cloudflared not found (looked on PATH, then in "
+                             "windows/tools/ and linux/tools/)"}
+        cmd = share_command(cf)
+        kwargs = {}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = 0x08000000          # CREATE_NO_WINDOW
+        try:
+            p = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT,
+                                 stdin=subprocess.DEVNULL,
+                                 text=True, bufsize=1, **kwargs)
+        except Exception as e:
+            return {"active": False, "url": None, "started": None,
+                    "error": "could not start cloudflared: %s" % e}
+        SHARE.update(proc=p, url=None, error=None, started=time.time())
+    threading.Thread(target=_share_reader, args=(p,), daemon=True).start()
+    return share_status()
+
+
+def share_stop():
+    with SHARE_LOCK:
+        p = SHARE.get("proc")
+        SHARE.update(proc=None, url=None, error=None, started=None)
+    if p and p.poll() is None:
+        try:
+            p.terminate()
+            try:
+                p.wait(timeout=5)
+            except Exception:
+                p.kill()
+        except Exception:
+            pass
+    return {"active": False, "url": None, "started": None, "error": None}
+
+
+# A normal exit (Ctrl-C, quit) runs this; a systemd stop kills the whole cgroup,
+# cloudflared included, even when no Python cleanup gets to run.
+atexit.register(share_stop)
+
+
 # ---------------- CDP listener ----------------
 async def run():
     state = State()
@@ -2359,6 +2497,18 @@ if __name__ == "__main__":
                 self.end_headers()
                 self.wfile.write(out)
                 return
+            if path == "/share":
+                # status of the public link, plus whether THIS client is on the
+                # machine (a tunneled viewer gets local=false and no controls)
+                st = share_status()
+                st["local"] = not share_from_tunnel(self.headers)
+                out = json.dumps(st).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+                return
             if path not in ("/dashboard.html", "/state.json"):
                 self.send_error(404, "Not found")
                 return
@@ -2368,7 +2518,24 @@ if __name__ == "__main__":
             # dashboard settings menu -> muting prefs (localhost + tunnel both OK;
             # nothing else is writable and the body never touches the filesystem
             # outside settings.json)
-            if self.path.split("?")[0] != "/settings":
+            path = self.path.split("?")[0]
+            if path in ("/share/start", "/share/stop"):
+                # Refused when it arrives through the tunnel: a viewer holding
+                # the link must not be able to open or kill the tunnel.
+                if share_from_tunnel(self.headers):
+                    out = json.dumps({"ok": False, "active": True,
+                                      "err": "not available over the share link"}).encode()
+                    self.send_response(403)
+                else:
+                    st = share_start() if path == "/share/start" else share_stop()
+                    out = json.dumps({"ok": True, **st}).encode()
+                    self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+                return
+            if path != "/settings":
                 self.send_error(404, "Not found")
                 return
             try:

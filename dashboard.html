@@ -27,6 +27,20 @@
 #settings.open { display:block; }
 #settings h2 { margin:0 0 4px; font-size:15px; }
 #settings .sethint { color: var(--muted); font-size:11px; margin:4px 0; }
+#share-backdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,.55);
+            z-index:40; }
+#share-backdrop.open { display:block; }
+#share { display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+            z-index:41; width:min(520px, 92vw);
+            background: var(--card); border:1px solid var(--border); border-radius:12px;
+            padding:16px 20px; font-size:13px; box-shadow:0 12px 40px rgba(0,0,0,.5); }
+#share.open { display:block; }
+#share h2 { margin:0 0 4px; font-size:15px; }
+#share .sethint { color: var(--muted); font-size:11px; margin:4px 0; }
+#shareurl { width:100%; box-sizing:border-box; background:transparent; color:var(--fg);
+            border:1px solid var(--border); border-radius:6px; padding:6px 8px;
+            font-size:12px; margin:8px 0; }
+#share .row { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
 #settings label { margin-right:14px; cursor:pointer; white-space:nowrap; }
 .arow { display:flex; align-items:center; gap:10px; padding:7px 4px;
         border-bottom:1px solid var(--border); }
@@ -117,6 +131,7 @@ tr.groupheader td { background: rgba(255,255,255,.06); color: var(--fg);
 <h1>FSL Dispatch Tracker <span style="color:#8b909c;font-size:11px">v3.0</span> <span id="conn" class="conn-bad">connecting</span>
   <button id="bellbtn" class="repbtn" style="margin-left:auto" onclick="toggleAlerts()">🔔 Enable alerts</button>
   <button id="gearbtn" class="repbtn" style="margin-left:6px" onclick="toggleSettings()">⚙ Settings</button>
+  <button id="sharebtn" class="repbtn" style="margin-left:6px" onclick="toggleShare()">🔗 Share</button>
 </h1>
 <div id="kmibackdrop" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:40" onclick="hideKmi()"></div>
 <div id="kmimodal" style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); z-index:41; width:min(520px,92vw); max-height:80vh; overflow-y:auto; background:var(--card); border:1px solid var(--border); border-radius:12px; padding:14px 18px; font-size:13px; box-shadow:0 12px 40px rgba(0,0,0,.5)">
@@ -150,6 +165,22 @@ tr.groupheader td { background: rgba(255,255,255,.06); color: var(--fg);
   <button class="abtn" style="margin-top:12px" onclick="toggleRuleForm()">＋ Add new alert</button>
   <div id="ruleform" style="display:none; margin-top:10px; border-top:1px solid var(--border); padding-top:10px"></div>
   <div id="setstatus" class="sethint"></div>
+</div>
+<div id="share-backdrop" onclick="toggleShare()"></div>
+<div id="share">
+  <h2>Share this board</h2>
+  <div class="sethint">A temporary public link to this dashboard. Anyone with it can VIEW
+  the live board — no install, no login. Every link you create is new, and it closes
+  automatically when the tracker stops.</div>
+  <div id="sharestatus" class="sethint"></div>
+  <div id="shareurlwrap" style="display:none">
+    <input id="shareurl" readonly onclick="this.select()">
+  </div>
+  <div class="row">
+    <button id="sharecreate" class="abtn" onclick="createShare()">Create link</button>
+    <button id="sharecopy" class="abtn" onclick="copyShare()">Copy link</button>
+    <button id="shareclose" class="abtn warn" onclick="closeShare()">Close share</button>
+  </div>
 </div>
 <div class="meta" id="meta">loading...</div>
 <div class="alerts" id="alerts"></div>
@@ -356,6 +387,91 @@ async function copyReport(btn, r) {
   btn.textContent = 'Copied!';
   btn.classList.add('copied');
   setTimeout(() => { btn.textContent = old; btn.classList.remove('copied'); }, 1500);
+}
+
+// ---- share link (public link to this board) ----
+// The tracker owns the tunnel, so this is only a view onto /share: create,
+// copy, close. A viewer who is reading the board THROUGH the link gets
+// local=false and no controls — they must not be able to close your link.
+let sharePoll = null;
+function toggleShare() {
+  const p = document.getElementById('share');
+  const b = document.getElementById('share-backdrop');
+  const show = !p.classList.contains('open');
+  p.classList.toggle('open', show);
+  b.classList.toggle('open', show);
+  if (show) {
+    refreshShare();
+    sharePoll = setInterval(refreshShare, 3000);   // catch the url appearing
+  } else if (sharePoll) {
+    clearInterval(sharePoll);
+    sharePoll = null;
+  }
+}
+function renderShare(j) {
+  const st = document.getElementById('sharestatus');
+  const wrap = document.getElementById('shareurlwrap');
+  const bc = document.getElementById('sharecreate');
+  const bcopy = document.getElementById('sharecopy');
+  const bclose = document.getElementById('shareclose');
+  if (j.local === false) {
+    st.style.color = '';
+    st.textContent = 'You are viewing this board through the share link, so the link '
+                   + 'controls are not available here.';
+    [bc, bcopy, bclose].forEach(b => b.style.display = 'none');
+    wrap.style.display = 'none';
+    return;
+  }
+  st.style.color = j.error ? 'var(--red)' : '';
+  st.textContent = j.error ? j.error
+    : (!j.active ? 'Not sharing.'
+       : (j.url ? 'Link is live. Closing the tracker closes the link too.'
+                : 'Starting… the link can take a minute or two to become reachable.'));
+  bc.style.display = j.active ? 'none' : '';
+  bcopy.style.display = (j.active && j.url) ? '' : 'none';
+  bclose.style.display = j.active ? '' : 'none';
+  if (j.active && j.url) {
+    document.getElementById('shareurl').value = j.url;
+    wrap.style.display = '';
+  } else {
+    wrap.style.display = 'none';
+  }
+}
+async function refreshShare() {
+  try {
+    renderShare(await (await fetch('/share')).json());
+  } catch (e) {
+    const st = document.getElementById('sharestatus');
+    st.style.color = 'var(--red)';
+    st.textContent = 'tracker not reachable: ' + e;
+  }
+}
+async function shareAction(path) {
+  const st = document.getElementById('sharestatus');
+  st.style.color = '';
+  st.textContent = 'working…';
+  try {
+    renderShare(await (await fetch(path, {method: 'POST'})).json());
+  } catch (e) {
+    st.style.color = 'var(--red)';
+    st.textContent = 'failed: ' + e;
+  }
+}
+function createShare() { shareAction('/share/start'); }
+function closeShare()  { shareAction('/share/stop'); }
+async function copyShare() {
+  const btn = document.getElementById('sharecopy');
+  const val = document.getElementById('shareurl').value;
+  try {
+    await navigator.clipboard.writeText(val);
+  } catch (e) {
+    const i = document.getElementById('shareurl');
+    i.removeAttribute('readonly'); i.select(); document.execCommand('copy');
+    i.setAttribute('readonly', 'readonly');
+  }
+  const old = btn.textContent;
+  btn.textContent = 'Copied!';
+  setTimeout(() => { btn.textContent = old; }, 1500);
 }
 async function poll() {
   try {

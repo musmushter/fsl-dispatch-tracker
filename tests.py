@@ -1225,6 +1225,97 @@ check("T41c it IS an Exception, so `except Exception` retries it",
       isinstance(_raised, Exception))
 
 
+# ---- T42: share link (cloudflared quick tunnel) --------------------------
+# The tunnel is a CHILD of the tracker process — that relationship is what makes
+# it die with the tracker, so it is the thing worth locking down. These cases
+# drive the manager with a FAKE cloudflared (a Python script, so the suite stays
+# portable to Windows colleagues) instead of touching the network.
+_share_dir = tempfile.mkdtemp(prefix="t42_")
+_good = os.path.join(_share_dir, "fake_cf.py")
+with open(_good, "w", encoding="utf-8") as f:
+    f.write("import sys, time\n"
+            "print('2026-01-01T00:00:00Z INF +" + "-" * 60 + "+')\n"
+            "print('2026-01-01T00:00:00Z INF |  "
+            "https://fake-tunnel-abc123.trycloudflare.com  |')\n"
+            "sys.stdout.flush()\n"
+            "time.sleep(300)\n")
+_bad = os.path.join(_share_dir, "fake_cf_dies.py")
+with open(_bad, "w", encoding="utf-8") as f:
+    f.write("import sys\nsys.stderr.write('no can do\\n')\nsys.exit(7)\n")
+
+_orig_cmd  = m.share_command
+_orig_find = m.share_cloudflared
+_orig_env_cf = os.environ.get("FSL_CLOUDFLARED")
+try:
+    os.environ["FSL_CLOUDFLARED"] = sys.executable     # exists, so lookup passes
+    m.share_stop()
+
+    _st = m.share_status()
+    check("T42a a fresh tracker is not sharing",
+          _st["active"] is False and _st["url"] is None and _st["error"] is None)
+
+    check("T42b CF-Connecting-IP marks a request as coming through the link",
+          m.share_from_tunnel({"CF-Connecting-IP": "1.2.3.4"}) is True)
+    check("T42c X-Forwarded-For marks a request as coming through the link",
+          m.share_from_tunnel({"X-Forwarded-For": "1.2.3.4"}) is True)
+    check("T42d an ordinary local request is not treated as tunneled",
+          m.share_from_tunnel({}) is False)
+
+    check("T42e FSL_CLOUDFLARED is honoured when it exists",
+          m.share_cloudflared() == sys.executable)
+
+    m.share_cloudflared = lambda: None
+    _err = m.share_start()
+    check("T42f a missing cloudflared is REPORTED, not raised",
+          _err["active"] is False and "cloudflared not found" in (_err["error"] or ""),
+          f"-> {_err['error']}")
+    m.share_cloudflared = _orig_find
+
+    # the fake tunnel: prints a url on its log then stays up, like the real one
+    m.share_command = lambda cf: [sys.executable, _good]
+    m.share_start()
+    _st = m.share_status()
+    _t = time.time()
+    while not _st["url"] and time.time() - _t < 10:
+        time.sleep(0.1)
+        _st = m.share_status()
+    check("T42g the public url is parsed out of cloudflared's log",
+          _st["url"] == "https://fake-tunnel-abc123.trycloudflare.com",
+          f"-> {_st['url']}")
+
+    _pid = m.SHARE["proc"].pid
+    m.share_start()
+    check("T42h starting twice keeps ONE tunnel (idempotent)",
+          m.SHARE["proc"].pid == _pid, f"-> pid {m.SHARE['proc'].pid}")
+
+    _proc = m.SHARE["proc"]
+    m.share_stop()
+    _st = m.share_status()
+    check("T42i stop terminates the tunnel and clears the url",
+          _proc.poll() is not None and _st["active"] is False and _st["url"] is None,
+          f"-> exit code {_proc.poll()}")
+
+    m.share_command = lambda cf: [sys.executable, _bad]
+    m.share_start()
+    _st = m.share_status()
+    _t = time.time()
+    while _st["active"] and time.time() - _t < 10:
+        time.sleep(0.1)
+        _st = m.share_status()
+    check("T42j a cloudflared that dies is reported, not left 'active'",
+          _st["active"] is False and "exited" in (_st["error"] or ""),
+          f"-> {_st['error']}")
+finally:
+    m.share_command = _orig_cmd
+    m.share_cloudflared = _orig_find
+    m.share_stop()
+    if _orig_env_cf is None:
+        os.environ.pop("FSL_CLOUDFLARED", None)
+    else:
+        os.environ["FSL_CLOUDFLARED"] = _orig_env_cf
+    m.shutil.rmtree(_share_dir, ignore_errors=True)
+
+
 # Summary LAST: any check placed after this point runs UNCOUNTED and the
 # reported total lies. T23/T24 used to sit below the old print position, so
 # their results never reached the total.
