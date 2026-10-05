@@ -84,6 +84,35 @@ open_dashboard() {
     fi
 }
 
+# Close leftover login-redirect tabs. They are dead weight, and with 'continue
+# where you left off' Chromium restores them on every start, where they pile up
+# and — if one comes back to the front — make a perfectly good session look
+# like it got logged out.
+# Keep exactly ONE console tab. Two things used to leave extras behind:
+# leftover login-redirect tabs (which 'continue where you left off' restores on
+# every start, and which — brought to the front — make a working session look
+# logged out), and duplicate console tabs from deciding before the session
+# restore had finished.
+tidy_console_tabs() {
+    pages | "$PY" -c "
+import json,sys
+try:
+    ts = [t for t in json.load(sys.stdin) if t.get('type') == 'page']
+except Exception:
+    ts = []
+doomed  = [t['id'] for t in ts if 'login?ec=302' in t.get('url','')]
+console = [t['id'] for t in ts if 's/dispatch-console' in t.get('url','')]
+doomed += console[1:]          # keep the first console tab, ditch the rest
+for i in doomed:
+    print(i)
+" 2>/dev/null | while read -r id; do
+        [ -n "$id" ] || continue
+        curl -s --max-time 5 "http://127.0.0.1:$CDP_PORT/json/close/$id" >/dev/null 2>&1 \
+            && say "closed a spare console/login tab"
+    done
+    return 0
+}
+
 echo "FSL tracker — starting up"
 
 # ---------------- 1. console browser ----------------
@@ -135,15 +164,25 @@ fi
 
 # ---------------- 2. dispatch console ----------------
 echo "== 2/4 dispatch console =="
-if pages | grep -q 'dispatch-console'; then
-    # Match the BROAD 'dispatch-console'. A console tab sitting on the login
-    # redirect is still a console tab; matching only the signed-in URL made
-    # this open a brand new tab on every run, and they piled up.
-    if pages | grep -q 's/dispatch-console"'; then
-        say "console tab already open"
-    else
-        say "console tab open (showing the login page)"
-    fi
+# Wait for Chromium's session restore to settle before deciding anything. With
+# 'continue where you left off' the previous tabs reappear ASYNCHRONOUSLY, and
+# deciding too early made this open a console tab that was about to be restored
+# anyway — that is where the duplicates came from.
+if ! pages | grep -q 'dispatch-console'; then
+    for _ in $(seq 1 8); do
+        sleep 1
+        pages | grep -q 'dispatch-console' && break
+    done
+fi
+
+SIGNED_IN=0; pages | grep -q 's/dispatch-console"'         && SIGNED_IN=1
+HAS_LOGIN=0; pages | grep -q 'login?[^"]*dispatch-console' && HAS_LOGIN=1
+
+if [ "$SIGNED_IN" = 1 ]; then
+    say "console tab already open and signed in"
+    tidy_console_tabs
+elif [ "$HAS_LOGIN" = 1 ]; then
+    say "console tab open (showing the login page)"
 else
     say "console tab not loaded — opening it"
     curl -s -X PUT --max-time 10 "http://127.0.0.1:$CDP_PORT/json/new?$CONSOLE_URL" \
@@ -161,7 +200,7 @@ fi
 # filled), so we cannot confirm a synthetic click would carry it — and a click
 # that didn't would count as a FAILED login, which repeated can lock the
 # account. Signing in stays a human action; this just removes the friction.
-if pages | grep -q 'login?[^"]*dispatch-console'; then
+if [ "$SIGNED_IN" != 1 ] && [ "$HAS_LOGIN" = 1 ]; then
     say "console needs a sign-in — bringing that tab to the front"
     TID=$(pages | "$PY" -c "
 import json,sys
