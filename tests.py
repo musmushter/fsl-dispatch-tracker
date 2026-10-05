@@ -1164,7 +1164,41 @@ _sv = _mk("En Route", 2000)
 _row = m.State.snapshot(_st9)["rows"][0]
 check("T38c far + still -> STANDSTILL unchanged",
       _row["moving"] == "STANDSTILL", f"-> {_row['moving']}")
-print(f"{ok} passed, {fail} failed")
+
+# ---- T40: first-load detection scopes the events audit file ----
+# Regression: detect_account's FIRST-LOAD branch returned early, so the events
+# handle stayed on the legacy events.jsonl for the whole process while
+# state.json was already account-scoped — the audit trail silently split across
+# two files. The old code fails T40b (handle still on the temp file).
+_st40 = m.State.__new__(m.State)
+for _a in ("services", "drivers", "alerts", "etas", "eta_fetch", "driver_order",
+           "wo_cache", "dropoff_cache", "kmi_cache", "feed_times",
+           "feed_time_fetch", "dropoff_fetch", "wo_fetch", "last_movement"):
+    setattr(_st40, _a, {})
+_st40.cleared_log_list = []
+_st40.last_data_ts = now
+_st40.last_full_ts = now
+_st40.login_required = False
+_st40.terr_set = set()               # falsy -> takes the FIRST-LOAD branch
+_st40._acct_cand_key = None
+_st40._acct_cand_n = 0
+_st40.events_fh = open(_TMP + '/t40_events.jsonl', 'a')
+_T40A, _T40B = "0HhTestT40AAAAAA", "0HhTestT40BBBBBB"
+_multi40 = json.dumps([{"ServiceTerritoryId": _T40A, "AppointmentNumber": "SA-1"},
+                       {"ServiceTerritoryId": _T40B, "AppointmentNumber": "SA-2"}])
+_oldkey40 = m.ACCOUNT_KEY
+m.ACCOUNT_KEY = None
+m.State.detect_account(_st40, _multi40)
+check("T40a first load sets the account key",
+      m.ACCOUNT_KEY == sorted([_T40A, _T40B])[0][:15], f"-> {m.ACCOUNT_KEY}")
+check("T40b first load SCOPES the events file (was legacy events.jsonl)",
+      _st40.events_fh.name.endswith(f"events_{m.ACCOUNT_KEY[:8]}.jsonl"),
+      f"-> {_st40.events_fh.name}")
+try:
+    _st40.events_fh.close()
+except Exception:
+    pass
+m.ACCOUNT_KEY = _oldkey40
 
 # ---- T23: custom rule engine ----
 _r1 = {"id":"x","name":"ER>25","match":"all","conds":[
@@ -1233,5 +1267,10 @@ try:
     m.SETTINGS.clear(); m.SETTINGS.update(old_settings)
 finally:
     m.State.first_service = _orig
+
+# Summary LAST: any check placed after this point runs UNCOUNTED and the
+# reported total lies. T23/T24 used to sit below the old print position, so
+# their results never reached the total.
+print(f"{ok} passed, {fail} failed")
 
 sys.exit(1 if fail else 0)
