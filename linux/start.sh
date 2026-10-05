@@ -113,6 +113,37 @@ for i in doomed:
     return 0
 }
 
+# Wait for Chromium's session restore to bring the console tab back.
+# Returns 0 if one is present (or turns up), 1 if nothing came back.
+#
+# Wait only while the restore is still making progress: with 'continue where
+# you left off' the tab set grows asynchronously, so stop as soon as a console
+# tab appears, or once the tab count has held steady for ~0.6s. That removes
+# the old blind stall when the tabs had been closed BEFORE the browser was —
+# nothing was ever coming back, so waiting out the ceiling was pure delay.
+wait_for_console_tab() {
+    prev=""; stable=0
+    for _ in $(seq 1 25); do                     # 5s ceiling
+        pages | grep -q 'dispatch-console' && return 0
+        cur=$(pages | "$PY" -c "
+import json,sys
+try:
+    print(sum(1 for t in json.load(sys.stdin) if t.get('type') == 'page'))
+except Exception:
+    print(-1)
+" 2>/dev/null)
+        if [ "${cur:--1}" -gt 0 ] && [ "$cur" = "$prev" ]; then
+            stable=$((stable + 1))
+            [ "$stable" -ge 3 ] && return 1      # ~0.6s unchanged: done
+        else
+            stable=0
+        fi
+        prev="$cur"
+        sleep 0.2
+    done
+    return 1
+}
+
 echo "FSL tracker — starting up"
 
 # ---------------- 1. console browser ----------------
@@ -171,19 +202,16 @@ fi
 
 # ---------------- 2. dispatch console ----------------
 echo "== 2/4 dispatch console =="
-# Wait for Chromium's session restore to settle before deciding anything. With
-# 'continue where you left off' the previous tabs reappear ASYNCHRONOUSLY, and
-# deciding too early made this open a console tab that was about to be restored
-# anyway — that is where the duplicates came from.
-# Poll fast and stop the instant a console tab appears. Chromium's session
-# restore normally lands within a fraction of a second, so a 1s-per-tick loop
-# made every launch feel sluggish. The full window is only used on a fresh
-# profile, where nothing is coming back and we are about to open the tab
-# ourselves anyway.
-if ! pages | grep -q 'dispatch-console'; then
-    for _ in $(seq 1 25); do          # 25 x 0.2s = 5s ceiling
-        sleep 0.2
+# Wait for the session restore, but only while it is still doing something —
+# see wait_for_console_tab.
+if ! wait_for_console_tab; then
+    say "console tab not loaded — opening it"
+    curl -s -X PUT --max-time 10 "http://127.0.0.1:$CDP_PORT/json/new?$CONSOLE_URL" \
+        >/dev/null 2>&1 || say "could not open it via CDP (open it by hand)"
+    # Wait only until the tab registers, rather than a blind 3s sleep.
+    for _ in $(seq 1 10); do
         pages | grep -q 'dispatch-console' && break
+        sleep 0.2
     done
 fi
 
@@ -195,11 +223,6 @@ if [ "$SIGNED_IN" = 1 ]; then
     tidy_console_tabs
 elif [ "$HAS_LOGIN" = 1 ]; then
     say "console tab open (showing the login page)"
-else
-    say "console tab not loaded — opening it"
-    curl -s -X PUT --max-time 10 "http://127.0.0.1:$CDP_PORT/json/new?$CONSOLE_URL" \
-        >/dev/null 2>&1 || say "could not open it via CDP (open it by hand)"
-    sleep 3
 fi
 # On the login page: surface the tab and TICK 'Remember me'.
 #
