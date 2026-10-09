@@ -2,6 +2,7 @@
 state*.json
 events*.jsonl
 etas*.json
+roster*.json
 tracker_stdout.log
 __pycache__/
 recon/

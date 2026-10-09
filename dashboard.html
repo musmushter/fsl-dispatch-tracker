@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>FSL Tracker v3.0</title>
+<title>FSL Tracker v3.1</title>
 <style>
   :root { --fg:#e8e8e8; --bg:#14161a; --card:#1e2127; --border:#33373f;
           --red:#e5484d; --amber:#f5a623; --green:#46a758; --muted:#8b909c; }
@@ -77,11 +77,11 @@ tr.groupheader td { background: rgba(255,255,255,.06); color: var(--fg);
   #drivertbl th:nth-child(6), #drivertbl td:nth-child(6) { width: 64px; }    /* In status */
   #drivertbl th:nth-child(7), #drivertbl td:nth-child(7) { width: 10%; }   /* ETA */
   #drivertbl th:nth-child(8), #drivertbl td:nth-child(8) { width: 15%; }   /* Vehicle */
-  #drivertbl th:nth-child(9), #drivertbl td:nth-child(9) { width: 24%; }   /* Address */
+  #drivertbl th:nth-child(9), #drivertbl td:nth-child(9) { width: 21%; }   /* Address */
   #drivertbl th:nth-child(10), #drivertbl td:nth-child(10) { width: 52px; }  /* Dist */
   #drivertbl th:nth-child(11), #drivertbl td:nth-child(11) { width: 56px; }  /* GPS age */
   #drivertbl td:nth-child(12) { white-space: normal; }
-  #drivertbl th:nth-child(12), #drivertbl td:nth-child(12) { width: 5%; }  /* Flags */
+  #drivertbl th:nth-child(12), #drivertbl td:nth-child(12) { width: 8%; }  /* Flags */
   #drivertbl th:nth-child(13), #drivertbl td:nth-child(13) { width: 74px; }  /* Report btn */
   #clearedwrap th:nth-child(1), #clearedwrap td:nth-child(1) { width: 7%; }  /* Cleared */
   #clearedwrap th:nth-child(2), #clearedwrap td:nth-child(2) { width: 6%; }  /* Call */
@@ -100,6 +100,10 @@ tr.groupheader td { background: rgba(255,255,255,.06); color: var(--fg);
           font-weight: 700; margin-right: 3px; }
   .flag.r { background: var(--red); color: white; }
   .flag.y { background: var(--amber); color: #1a1a1a; }
+  /* the service-level RED ALERT marker — same red as a flag but outlined and
+     glowing so it reads as a banner over the row, not as one more flag */
+  .flag.redmark { background: var(--red); color: #fff; border: 1px solid #ffffff88;
+          box-shadow: 0 0 8px #e5484dcc; letter-spacing: .5px; }
   .st { padding: 1px 8px; border-radius: 9px; font-size: 11px; font-weight: 600; }
   .st-dispatched { background:#e5484d22; color:#ff7d81; }
   .st-enroute { background:#228b2222; color:#6cd96c; }
@@ -128,7 +132,7 @@ tr.groupheader td { background: rgba(255,255,255,.06); color: var(--fg);
 </style>
 </head>
 <body>
-<h1>FSL Dispatch Tracker <span style="color:#8b909c;font-size:11px">v3.0</span> <span id="conn" class="conn-bad">connecting</span>
+<h1>FSL Dispatch Tracker <span style="color:#8b909c;font-size:11px">v3.1</span> <span id="conn" class="conn-bad">connecting</span>
   <button id="bellbtn" class="repbtn" style="margin-left:auto" onclick="toggleAlerts()">🔔 Enable alerts</button>
   <button id="gearbtn" class="repbtn" style="margin-left:6px" onclick="toggleSettings()">⚙ Settings</button>
   <button id="sharebtn" class="repbtn" style="margin-left:6px" onclick="toggleShare()">🔗 Share</button>
@@ -283,8 +287,12 @@ const tr = document.createElement('tr');
                   st.startsWith('onlocation')||st.startsWith('tow')||st.startsWith('intow')?'st-onlocation':
                   st.startsWith('onrap')?'st-onrap':
                   st.startsWith('spotted')?'st-spotted':'st-scheduled';
-    const flags = (r.alerts||[]).map(t =>
-      '<span class="flag ' + (t==='MEMBER_WAITING'?'y':'r') + '">' +
+    const redAlert = r.red_alert === true;   // console paints this bar red/orange
+    const flags = (redAlert
+        ? '<span class="flag redmark" title="RED ALERT SERVICE — console colour ' +
+          esc(r.gantt_color || 'red') + '">RED ALERT</span>' : '') +
+      (r.alerts||[]).map(t =>
+      '<span class="flag ' + (t==='MEMBER_WAITING' ? 'y' : 'r') + '">' +
       (t==='DISPATCH_OVERDUE'?'DISPATCH>10m':t==='STANDING_STILL'?'STILL>10m':
        t==='FAR_AWAY'?'FAR>5km':t==='ETA_EXPIRED'?'ETA LATE':'WAIT>60m') + '</span>').join('');
     const gpsAge = r.gps_age_min == null ? '–' :
@@ -317,7 +325,8 @@ const tr = document.createElement('tr');
                     s:r.status||'', m:Math.round(r.status_min||0),
                     e:r.eta||'', lo:r.eta_low, hi:r.eta_high,
                     mv:r.moving||'', mm:r.moving_min, km:r.dist_km,
-                    cs:r.chain_second||false};
+                    cs:r.chain_second||false,
+                    ra:r.red_alert === true};
     rbtn.addEventListener('click', function() { copyReport(this, this.rowData); });
     const kbtn = tr.querySelector('.kmibtn');
     kbtn.rowData = {sa: r.sa_id || '', d: (r.driver||'').split('(')[0].trim(), c: r.call_id||''};
@@ -329,8 +338,17 @@ window.clearedLimit = 20;
 function loadMore() { window.clearedLimit += 20; poll(); }
 // ---- report ----
 // "Paul 517450 Dispatched for 10 mins no ETA not answering and not moving on map"
+// A service the CONSOLE paints red/orange (GanttColor__c, high-risk) puts
+// 'RED ALERT SERVICE' right after the call ID — it is a console-colour fact,
+// NOT one of the tracker's own alerts; a 'moving but didn't change status'
+// service gets that clause on its own line ("He is moving …"), and an ETA that
+// passed less than 3 min ago reads "ETA just exceeded".
+const JUST_LATE_MS = 3 * 60000;
 function buildReport(r) {
-  const parts = [r.d, r.c, r.s + ' for ' + r.m + ' mins'];
+  // a service the CONSOLE paints red/orange says so right after the call ID
+  const red = r.ra === true ? ' RED ALERT SERVICE' : '';
+  const head = r.d + ' ' + r.c + red;
+  const parts = [r.s + ' for ' + r.m + ' mins'];
   // ETA: from the raw epoch window (lo/hi). Minutes until the window STARTS;
   // once inside the window: 'arriving now'; past the window: LATE format.
   const lateMin = (r.lo && r.hi) ? Math.round((Date.now() - r.hi) / 60000) : null;
@@ -350,6 +368,9 @@ function buildReport(r) {
     // not moving: only meaningful for En Route ('not moving for 10 mins').
     // Dispatched standstill is just the lingering pre-response state —
     // 'not moving on map' says it.
+    // moving-while-status-stale goes on its OWN line (capital H), never glued
+    // onto the 'not answering' line with ' and '.
+    let moveLine = null;
     if (r.mv === 'STANDSTILL' && r.s === 'En Route') {
       const still = (r.mm != null && r.mm >= 3) ? r.mm : r.m;
       tail.push('not moving for ' + still + ' mins');
@@ -360,9 +381,9 @@ function buildReport(r) {
     else if ((r.mv === 'MOVING' && r.s === 'Dispatched')
              || ((r.mv === 'AT LOC' || r.mv === 'AT DROP OFF')
                  && (r.s === 'Dispatched' || r.s === 'En Route')))
-      tail.push('he is moving but didn\'t change status');
+      moveLine = 'He is moving but didn\'t change status';
     parts.push(tail.join(' and '));
-    return parts.join(' ');
+    return head + ' ' + parts.join(' ') + (moveLine ? '\n' + moveLine : '');
   }
   // ---- late-ETA format ----
   // "Bryce 596104 ER for 33 mins
@@ -370,9 +391,13 @@ function buildReport(r) {
   //  Mbr needs an update on ETA"
   // 'not close to srv' only when genuinely far: > ~5 min out (~3.3 km at
   // avg tow speed). Close = about to arrive, no point telling dispatch.
-  let lateLine = 'He exceeded ETA ' + lateMin + ' mins ago';
+  // Exceeded within the last 3 min = still fresh, say 'ETA just exceeded'.
+  const justLate = r.hi && (Date.now() - r.hi) <= JUST_LATE_MS;
+  let lateLine = justLate ? 'ETA just exceeded'
+                          : 'He exceeded ETA ' + lateMin + ' mins ago';
   if (r.km != null && r.km > 3.3) lateLine += ' and not close to srv';
-  return parts.slice(0, 3).join(' ') + '\n' + lateLine + '\nMbr needs an update on ETA';
+  return head + ' ' + parts.join(' ') + '\n' + lateLine +
+         '\nMbr needs an update on ETA';
 }
 async function copyReport(btn, r) {
   const text = buildReport(r);

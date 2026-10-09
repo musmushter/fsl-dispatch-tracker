@@ -67,6 +67,7 @@ def account_paths(key):
         "events":  BASE + f"/events{sfx}.jsonl",
         "etas":    BASE + f"/etas{sfx}.json",
         "settings":BASE + f"/settings{sfx}.json",
+        "roster":  BASE + f"/roster{sfx}.json",
     }
 EVENTS_FILE = BASE + r"/events.jsonl"
 
@@ -161,6 +162,9 @@ STALE_SCHED_HOURS = 3          # a service still 'Scheduled' this long after
                                # off) -> drop from the board
 
 GPS_STALE_MIN = 10             # live position older than this = stale
+FEED_REFRESH_MS = 10 * 60000   # re-read an ACTIVE service's SA feed at most
+                               # this often (a same-status re-dispatch only
+                               # shows up in the feed, never as a status flip)
 ETA_EXPIRED_DIST_M = 6700      # ETA passed and still farther than this
                                # (~10 min at 40 km/h avg) = ETA_EXPIRED alert
 
@@ -169,6 +173,50 @@ ARRIVED_STATUSES = ("On Location", "Tow Loaded", "In Tow")
 # statuses that complete a service (for the cleared-services log; 'Canceled'
 # is deliberately excluded — a canceled call is not work performed)
 DONE_STATUSES = ("Cleared", "Complete", "Tow Complete")
+
+
+def alert_label(a):
+    """Dashboard-facing name of an active alert (a custom alert shows its own name)."""
+    return a.get("custom_name") if a.get("type") == "CUSTOM" else a.get("type")
+
+
+def _hex_rgb(color):
+    """(r, g, b) from '#RRGGBB' / '#RGB' / 'RRGGBB', or None."""
+    h = (color or "").strip().lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    if len(h) != 6:
+        return None
+    try:
+        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return None
+
+
+def console_red_alert(color):
+    """True when the CONSOLE paints this service in its high-risk red/orange.
+
+    The FSL Gantt writes the service's own GanttColor__c into the bar's inline
+    background (validated against the live board: normal bars are #228B22 with
+    matching payload values), so the datum IS the console colour. Red/orange is
+    a HUE judgement — anything green/blue/grey (normal or cleared) is not, and a
+    missing colour never fires.
+    """
+    rgb = _hex_rgb(color)
+    if not rgb:
+        return False
+    r, g, b = [c / 255 for c in rgb]
+    mx, mn = max(r, g, b), min(r, g, b)
+    if mx <= 0 or (mx - mn) / mx < 0.35:      # grey / washed out
+        return False
+    d = mx - mn
+    if mx == r:
+        hue = (60 * ((g - b) / d)) % 360
+    elif mx == g:
+        hue = 60 * ((b - r) / d) + 120
+    else:
+        hue = 60 * ((r - g) / d) + 240
+    return hue <= 45 or hue >= 345             # red .. orange
 
 
 def now_ms():
@@ -250,6 +298,131 @@ def feed_post_epoch(tm):
     if tm.group(1).lower() == "yesterday":
         wall -= dt.timedelta(days=1)
     return int(wall.timestamp() * 1000)
+
+
+def feed_fetch_priority(svc, feed_times, feed_time_fetch, now, is_external=False):
+    """Why (if at all) this service's SA feed must be re-read this cycle.
+
+    -> (priority, sort_key) or None.
+       1 = the status clock has no exact time yet (running on the LastModified
+           seed) — the original drift fix.
+       2 = it HAS an exact time but the record was written since our last read.
+           A same-status RE-DISPATCH (Dispatched -> Dispatched) never flips
+           Status, so nothing else refreshes it and the clock would keep the
+           FIRST dispatch post forever (Thomas Watson 548265: board showed 28
+           min, real 10; the feed carried 3:47 PM and 4:05 PM Dispatched posts).
+       3 = cleared service not yet read, for the Callback list (newest first).
+    """
+    sa = svc.get("sa_id")
+    if not sa or (svc.get("call_type") or "").upper() == "RAP" or is_external:
+        return None
+    last_try = feed_time_fetch.get(sa, 0)
+    if now - last_try < FEED_REFRESH_MS:
+        return None                      # per-SA rate limit
+    exact = bool((feed_times.get(sa) or {}).get(svc.get("status")))
+    if svc.get("cleared_at"):
+        if sa in feed_times or now - svc["cleared_at"] > 12 * 3600 * 1000:
+            return None
+        return (3, -(svc.get("cleared_at") or 0))
+    if not exact:
+        return (1, 0)
+    if (svc.get("last_modified") or 0) > last_try:
+        return (2, 0)
+    return None
+
+
+BACKFILL_ACTION = "FSL.ctrl079_ResourceCalendar"
+
+
+def backfill_ctx_ok(ctx_action):
+    """True only when the ctx we hold came from the SAME action we replay.
+
+    A Visualforce Remoting ctx is bound to its action class: replaying
+    FSL.ctrl079_ResourceCalendar.getServices with the ctx captured from
+    FSL.ctrl001_Gantt.getDelta is refused with 402 "Remoting request invalid for
+    your session" — every single time (measured: 8/8 refusals per sweep, on the
+    employer's system for nothing). The app never issues that action itself
+    here, so the lane backfill stays idle and board completeness comes from the
+    startup + hourly console reload (which re-sends the app's full board).
+    """
+    return ctx_action == BACKFILL_ACTION
+
+
+CONSOLE_DAY_RE = re.compile(r"([A-Za-z]{3}),\s*([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})")
+
+# the gantt lives in a SAME-ORIGIN iframe, so one page-context evaluate reaches it
+CONSOLE_DAY_FRAME_JS = (
+    "(() => { const fr = Array.from(document.querySelectorAll('iframe')).find(f => {"
+    " try { return f.contentDocument && f.contentDocument.querySelector('.dhx_cal_date'); }"
+    " catch (e) { return false; } });"
+    " return fr ? fr.contentDocument.querySelector('.dhx_cal_date').innerText : null; })()")
+
+
+def console_day_click_js(selector, times=1):
+    """JS that clicks a DHTMLX day arrow inside the gantt iframe.
+
+    The controls are Angular ng-click handlers, so a plain `.click()` is not
+    enough — dispatch mousedown/mouseup/click with the IFRAME window's own
+    MouseEvent constructor (measured working against the live console).
+    """
+    return ("(() => { const fr = Array.from(document.querySelectorAll('iframe')).find(f => {"
+            " try { return f.contentDocument && f.contentDocument.querySelector('.dhx_cal_date'); }"
+            " catch (e) { return false; } });"
+            " if (!fr) return 'no gantt frame';"
+            " const d = fr.contentDocument, el = d.querySelector("
+            + json.dumps(selector) + ");"
+            " if (!el) return 'no day button';"
+            " const r = el.getBoundingClientRect();"
+            " const o = {bubbles:true, cancelable:true, clientX:r.left+r.width/2,"
+            " clientY:r.top+r.height/2, view:fr.contentWindow};"
+            " for (let i = 0; i < " + str(int(times)) + "; i++) {"
+            "  el.dispatchEvent(new fr.contentWindow.MouseEvent('mousedown', o));"
+            "  el.dispatchEvent(new fr.contentWindow.MouseEvent('mouseup', o));"
+            "  el.dispatchEvent(new fr.contentWindow.MouseEvent('click', o)); }"
+            " return 'clicked x' + " + str(int(times)) + "; })()")
+
+
+def parse_console_day(text):
+    """'Thu, October 8, 2026' -> date, or None for anything else."""
+    if not text:
+        return None
+    m = CONSOLE_DAY_RE.search(str(text))
+    if not m:
+        return None
+    for fmt in ("%b %d %Y", "%B %d %Y"):
+        try:
+            return dt.datetime.strptime(
+                "%s %s %s" % (m.group(2), m.group(3), m.group(4)), fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def day_step_selector(shown, target):
+    """Which DHTMLX arrow brings `shown` to `target` (None when already there)."""
+    if not shown or not target:
+        return None
+    delta = (shown - target).days
+    if delta == 0:
+        return None
+    return ".dhx_cal_prev_button" if delta > 0 else ".dhx_cal_next_button"
+
+
+def backfill_targets(roster, backfill_done, active_rids, limit=4):
+    """Lane rids the gantt backfill should re-read this cycle.
+
+    While ANY roster rid is still uncovered in this run, sweep every lane —
+    after a restart the board only holds services whose record changed since,
+    so a driver's earlier leg can be missing while a later one is present and
+    the pair logic then follows the wrong leg (Paul Edwards 545785). Once
+    covered, fall back to re-polling only lanes with no active service, which
+    is what catches a brand-new assignment on an off-screen lane.
+    """
+    if len(backfill_done) < len(roster):
+        todo = [rid for rid in roster if rid and rid not in backfill_done]
+    else:
+        todo = [rid for rid in roster if rid and rid not in active_rids]
+    return todo[:limit]
 
 
 def parse_status_times_from_feed(body):
@@ -633,13 +806,19 @@ class State:
         self._acct_cand_n = 0
         self.terr_set = set()
         self.rpc_ctx = None    # last apexremote ctx (csrf/vid) for self-serve RPCs
+        self.rpc_ctx_action = None   # the action that ctx belongs to (class-bound)
         self.kmi_cache = {}    # ("kmi", sa_id) -> (ts, messages)
         self.roster = {}       # rid -> {"name": ...} — persists across restarts
         try:
-            with open(current_paths()["roster"], encoding="utf-8") as f:
-                self.roster = json.load(f)
-        except Exception:
+            with open(current_paths()["roster"], encoding="utf-8") as _fh:
+                self.roster = json.load(_fh)
+        except FileNotFoundError:
             pass
+        except Exception as e:
+            print("roster load failed:", e, flush=True)
+        # rids the gantt backfill has already covered in THIS run: while any
+        # roster rid is still uncovered the loop sweeps every lane (see below)
+        self.backfill_done = set()
         # enrichment via the WO lightbox (Contact/member name); the gantt and
         # SA feeds never carry a person name
         self.wo_cache = {}      # parent_id -> {"name":..., "benefit":..., fetched ts}
@@ -760,8 +939,12 @@ class State:
             elif _ph and self.roster[_rid].get("phones") != _ph:
                 self.roster[_rid]["phones"] = _ph
             try:
-                with open(current_paths()["roster"], "w", encoding="utf-8") as f:
-                    json.dump(self.roster, f)
+                # NB: do NOT reuse `f` here — it is the record's field dict in
+                # this scope, and a `with open(...) as f` would clobber it for
+                # every later use in ingest_service (broke on the first run
+                # after the roster path started resolving).
+                with open(current_paths()["roster"], "w", encoding="utf-8") as _fh:
+                    json.dump(self.roster, _fh)
             except Exception:
                 pass
 
@@ -774,8 +957,14 @@ class State:
             if status in DONE_STATUSES and not rec.get("cleared_at"):
                 rec["cleared_at"] = f.get("LastModifiedDate")
         if status and status != prev_status:
-            rec["status_history"].append({"status": status, "t": now_ms(),
-                                          "source": "watch"})
+            # 'watch' = a transition we actually saw happen live ('now' is a real
+            # event time). 'seed' = the first time we met this record: its
+            # status_since comes from LastModifiedDate, which is the record's
+            # last WRITE and never a lifecycle event — status_epoch must prefer
+            # an exact feed post over it.
+            rec["status_history"].append({
+                "status": status, "t": now_ms(),
+                "source": "watch" if prev_status is not None else "seed"})
             # For a service we just learned about, keep the seeded
             # LastModifiedDate-based status_since (best estimate of when the
             # status actually started). Only a live observed flip gets "now".
@@ -841,12 +1030,17 @@ class State:
         read far too recent — Marcos' 24-min dispatch showed as 13)."""
         status = svc.get("status")
         hist = svc.get("status_history") or []
-        observed = bool(hist) and hist[-1].get("status") == status \
-            and hist[-1].get("source") == "watch"
+        last = hist[-1] if hist else {}
+        observed = last.get("status") == status and last.get("source") == "watch"
+        seeded = last.get("status") == status and last.get("source") == "seed"
         ft = (getattr(self, "feed_times", None) or {}).get(svc.get("sa_id")) or {}
         feed_t = ft.get(status)
-        observed = bool(hist) and hist[-1].get("status") == status \
-            and hist[-1].get("source") == "watch"
+        if seeded and feed_t:
+            # A record we only just met: status_since is its LastModifiedDate,
+            # the record's last WRITE, so a re-ingest can push the age far too
+            # recent (a 9-min En Route read as 3 min after every restart while
+            # the feed's own post sat at 4:14 PM). The feed post IS the event.
+            return feed_t
         if observed and svc.get("status_since"):
             # prefer a NEWER exact feed post over the live observation: a missed
             # delta (Spotted -> Dispatched re-dispatch) leaves the observed time
@@ -1521,8 +1715,15 @@ class State:
                 "dropoff": self._dropoff_of(svc),
                 "dist_km": round(dist_m / 1000, 1) if dist_m is not None else None,
                 "gps_age_min": round((now - pos.get("t", 0)) / 60000, 1) if pos.get("t") else None,
-                "alerts": [(a.get("custom_name") if a["type"] == "CUSTOM" else a["type"])
-                           for k, a in alerts.items() if a["driver_id"] == rid],
+                # the console's own Gantt bar colour for this service — the
+                # dispatch board paints red/orange = high-risk, green = normal
+                "gantt_color": svc.get("gantt_color"),
+                # RED ALERT SERVICE = the console paints this bar red/orange.
+                # NOT the tracker's own alerts: a green bar with a
+                # DISPATCH_OVERDUE alert is not a console red alert.
+                "red_alert": console_red_alert(svc.get("gantt_color")),
+                "alerts": [alert_label(a) for k, a in alerts.items()
+                           if a["driver_id"] == rid],
             })
         rows.sort(key=lambda r: (self.driver_order.get(r["resource_id"], 10**6),
                                  str(r["driver"] or "")))
@@ -1874,7 +2075,12 @@ async def run():
                 pd = params["request"].get("postData") or ""
                 if "apexremote" in params["request"]["url"] and '"ctx"' in pd:
                     try:
-                        state.rpc_ctx = json.loads(pd).get("ctx")
+                        _body = json.loads(pd)
+                        state.rpc_ctx = _body.get("ctx")
+                        # remember WHICH action this ctx came from: a ctx is
+                        # bound to its action class, so it can only be replayed
+                        # for that same action (see backfill_ctx_ok)
+                        state.rpc_ctx_action = _body.get("action")
                     except Exception:
                         pass
                 # keep dict bounded
@@ -2119,66 +2325,32 @@ async def run():
                     await asyncio.sleep(30)
 
         async def feed_time_loop():
-            """Fetch SA chatter feeds for cleared services to extract exact
-            status-change times (Scheduled/On Location/Cleared). 1/22 s."""
+            """Keep the exact status-change times for ACTIVE services fresh, and
+            backfill cleared ones for the Callback list. 2 fetches / 22 s.
+
+            A same-status RE-DISPATCH carries no status flip and no delta we can
+            see (the feed just gains another 'changed Status from Dispatched to
+            Dispatched' post), so a service whose clock is already 'exact' must
+            still be re-read when its RECORD has been written since our last
+            read — otherwise the status age keeps the FIRST dispatch post for
+            the rest of the job (Thomas Watson 548265: 28 min shown on the
+            board, 10 real, feed had 3:47 PM and 4:05 PM Dispatched posts)."""
             while True:
                 await asyncio.sleep(22)
                 try:
                     if (now_ms() - state.last_data_ts) / 1000 > 600:
                         continue
                     now = now_ms()
-                    job = None
-                    # two jobs per cycle (one feed fetch each) — backfill is
-                    # 2x/22s ≈ 330/h, drains a shift's backlog in ~45 min
-                    for _pass in range(2):
-                        job = None
-                        # 1) ACTIVE services whose status clock is a LastModified
-                        #    seed — their exact feed time fixes In-Status drift
-                        for s in state.services.values():
-                            if s["sa_id"] in state.feed_time_fetch:
-                                continue
-                            if s.get("cleared_at"):
-                                continue
-                            if (s.get("call_type") or "").upper() == "RAP":
-                                continue
-                            if state.is_external(s):
-                                continue
-                            if (now - state.feed_time_fetch.get(
-                                    s["sa_id"], 0) < 600000):
-                                continue
-                            hist = s.get("status_history") or []
-                            observed = bool(hist) and \
-                                hist[-1].get("source") == "watch" and \
-                                hist[-1].get("status") == s.get("status")
-                            if observed:
-                                continue  # live-observed = already exact
-                            ft = state.feed_times.get(s["sa_id"]) or {}
-                            if ft.get(s.get("status")):
-                                continue  # already have the exact time
-                            job = s
-                            break
-                        # 2) cleared services (Callback backfill) — newest first
-                        if not job:
-                            for s in sorted(state.services.values(),
-                                            key=lambda x: x.get("cleared_at") or 0,
-                                            reverse=True):
-                                if (not s.get("cleared_at")
-                                        or s["sa_id"] in state.feed_times
-                                        or s.get("sa_id") in state.feed_time_fetch):
-                                    continue
-                                if now - s["cleared_at"] > 12 * 3600 * 1000:
-                                    continue
-                                if (s.get("call_type") or "").upper() == "RAP":
-                                    continue
-                                if state.is_external(s):
-                                    continue
-                                if (now - state.feed_time_fetch.get(
-                                        s["sa_id"], 0) < 600000):
-                                    continue
-                                job = s
-                                break
-                        if not job:
-                            break
+                    # ---- pick this cycle's feeds (2), cheapest fix first ----
+                    cand = []
+                    for s in state.services.values():
+                        pr = feed_fetch_priority(s, state.feed_times,
+                                                 state.feed_time_fetch, now,
+                                                 state.is_external(s))
+                        if pr:
+                            cand.append((pr[0], pr[1], s))
+                    cand.sort(key=lambda t: (t[0], t[1]))
+                    for _prio, _key, job in cand[:2]:
                         state.feed_time_fetch[job["sa_id"]] = now
                         body = await fetch_feed_via_page(
                             "/ACEContractorCommunity/apex/"
@@ -2194,12 +2366,59 @@ async def run():
                                                 onsite=times.get("On Location"),
                                                 cleared=times.get("Cleared"),
                                                 reassigned=reassigned)
-                        job = None
                         await asyncio.sleep(1)
                 except Exception:
                     print("feed time error:", traceback.format_exc()[:200],
                           flush=True)
                     await asyncio.sleep(30)
+
+        async def eval_page_js(expr, timeout=20):
+            """Runtime.evaluate in the console PAGE (top frame)."""
+            page_ws, page_url = await cdp_page_ws_async()
+            if not page_ws or "/login" in (page_url or ""):
+                return None
+            import websockets as _w
+            async with _w.connect(page_ws, max_size=8 * 1024 * 1024) as tws:
+                await tws.send(json.dumps({"id": 11, "method": "Runtime.evaluate",
+                                           "params": {"expression": expr,
+                                                      "awaitPromise": True,
+                                                      "returnByValue": True}}))
+                while True:
+                    m = json.loads(await asyncio.wait_for(tws.recv(), timeout=timeout))
+                    if m.get("id") != 11:
+                        continue
+                    return (m.get("result", {}).get("result", {}) or {}).get("value")
+
+        async def guard_console_day(reason=""):
+            """Keep the console's gantt on HOUSTON's today.
+
+            A reload leaves the DHTMLX board on the browser's LOCAL day — and the
+            app's own 'Today' button jumps to that local day too (measured: it
+            went to Fri Oct 9 while Houston was still Thu Oct 8), so after the
+            hourly reload the board can sit on the wrong day and the app streams
+            the wrong day's services until someone switches it by hand. Step the
+            prev/next arrows to Houston's today instead.
+            """
+            target = dt.datetime.now(ZONE).date()
+            shown0 = None
+            for _ in range(10):
+                shown = parse_console_day(await eval_page_js(CONSOLE_DAY_FRAME_JS))
+                if shown0 is None:
+                    shown0 = shown
+                if shown is None:
+                    await asyncio.sleep(5)      # gantt not ready yet
+                    continue
+                sel = day_step_selector(shown, target)
+                if sel is None:
+                    if shown0 and shown0 != target:
+                        state.log_event("day_fix", reason=reason,
+                                        was=shown0.isoformat(), now=shown.isoformat())
+                        print("day guard: %s -> %s (%s)" % (shown0, shown, reason),
+                              flush=True)
+                    return True
+                await eval_page_js(console_day_click_js(sel, 1))
+                await asyncio.sleep(1.2)
+            return False
 
         async def reload_console():
             # discovery handles BOTH the /json/list HTTP endpoint and the
@@ -2227,6 +2446,10 @@ async def run():
                         state.last_reload_ts = now_ms()
                         state.log_event("watchdog_reload", url=t["url"][:200])
                         print("watchdog: reloaded console tab", flush=True)
+                        # a reload resets the gantt to the browser's LOCAL day;
+                        # put it back on Houston's today (see guard_console_day)
+                        await asyncio.sleep(15)
+                        await guard_console_day("reload")
                         return True
                     except Exception as e:
                         print("reload failed:", e, flush=True)
@@ -2237,15 +2460,29 @@ async def run():
             """Lane-coverage backfill: the console only loads services for lanes
             rendered in the gantt (virtualized). Resources scrolled out of view
             never stream their services — Daniel Baker's new call was invisible
-            until his lane scrolled past. Every 45 s, re-fetch getServices for
-            known resources that currently have NO active service, so a fresh
-            assignment is picked up even when the lane is off-screen."""
+            until his lane scrolled past.
+
+            TWO modes. While any roster rid is still uncovered in this run the
+            loop sweeps EVERY lane: after a restart the in-memory board only
+            holds services whose record changed since (deltas), so a driver's
+            EARLIER leg can be missing while a later one is present — the pair
+            logic then follows the wrong leg (Paul Edwards 545785 showed the
+            Dispatched second leg while his head leg sat On Location). Once the
+            roster is covered it falls back to the incremental rule: re-poll
+            only lanes with NO active service, to catch a fresh assignment.
+            (The roster path used to be missing from current_paths(), so this
+            loop silently fetched nothing at all.)
+            """
             while True:
                 await asyncio.sleep(45)
                 try:
                     if (now_ms() - state.last_data_ts) / 1000 > 600:
                         continue
                     if not state.rpc_ctx:
+                        continue
+                    # see backfill_ctx_ok: replaying another class's action is a
+                    # guaranteed 402, so don't put that traffic on the console
+                    if not backfill_ctx_ok(getattr(state, "rpc_ctx_action", None)):
                         continue
                     # date range: today .. +7d (matches console usage)
                     now_c = dt.datetime.now(ZONE)
@@ -2255,9 +2492,10 @@ async def run():
                     for s in state.services.values():
                         if not state.cleared(s) and s.get("resource_id"):
                             active_rids.add(s["resource_id"])
-                    todo = [rid for rid in state.roster
-                            if rid and rid not in active_rids]
+                    todo = backfill_targets(state.roster, state.backfill_done,
+                                            active_rids)
                     for rid in todo[:4]:   # 4 per cycle (~4/45s sweep)
+                        state.backfill_done.add(rid)
                         before = set(state.services)
                         body = await fetch_rpc_getservices(rid, d0, d1)
                         if body:
@@ -2389,8 +2627,30 @@ async def run():
             - toast when the session expires."""
             start_ts = now_ms()
             last_forced = now_ms()
+            last_day_check = now_ms()
+            startup_reloaded = False
             while True:
                 await asyncio.sleep(30)
+                # STARTUP: force one console reload before anything else. A cold
+                # tracker only receives deltas, and a delta carries CHANGED
+                # services only — every service whose record hasn't moved since
+                # is missing, which silently breaks the tow-pair pick (Paul
+                # Edwards 545785: the Dispatched second leg was followed while
+                # the head leg sat On Location). The old guard here tested
+                # last_full_ts, but ANY non-position apexremote response is fed
+                # through ingest_bulk, so a delta counts as a 'full load' and the
+                # reload never happened.
+                if not startup_reloaded and now_ms() - start_ts > 45000:
+                    startup_reloaded = True
+                    state.log_event("startup_reload")
+                    await reload_console()
+                    continue
+                # periodic day guard: the console can also drift off the correct
+                # day without a reload (a second browser/viewer, a manual
+                # mis-click, an app-side reset). Cheap: one DOM read.
+                if now_ms() - last_day_check >= 600000:
+                    last_day_check = now_ms()
+                    await guard_console_day("periodic")
                 # hourly forced console reload — resets Salesforce's inactivity
                 # timer so the 'Are you still here?' popup never disconnects the
                 # session mid-shift

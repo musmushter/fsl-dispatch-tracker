@@ -131,6 +131,14 @@ ALERTS (current set)
   FAR_AWAY           standstill >5 km from service               [toast]
   ETA_EXPIRED        posted ETA window passed + >6.7 km out      [toast]
   MEMBER_WAITING     Spotted 60+ min                             [board only]
+  The four toast alerts are the tracker's own (urgent) alerts; MEMBER_WAITING is
+  amber. RED ALERT — the board marker and the report's "RED ALERT SERVICE" — is
+  NOT one of them: it follows the CONSOLE's own Gantt colour. Every service's
+  GanttColor__c is read from the console payload (normal bars are #228B22
+  green) and a red/orange (high-risk) bar is marked. So a green bar carrying a
+  DISPATCH_OVERDUE alert is NOT a red alert, and a red bar IS marked even when
+  the tracker raises nothing. The Flags-column badge shows the console colour
+  in its tooltip.
   AT LOC / AT DROP OFF / MOVING are board states, not alerts: a standstill
   within 300 m of the service (or of the tow pair's drop-off leg) suppresses
   standstill alerts — the driver probably forgot to flip status.
@@ -140,11 +148,25 @@ Each row has a Report button that copies a dispatch-ready message to the
 clipboard: driver + call + status duration + ETA ("ETA n mins" / "no ETA")
 + "not answering" (always included; delete manually when wrong) + movement
 ("not moving for N mins" when En Route standstill, "not moving on map" when
-Dispatched standstill, "he is moving but didn't change status" when moving
-while Dispatched or sitting AT LOC/AT DROP OFF). If the ETA window has
-passed, the report switches to the 3-line late format ("He exceeded ETA
-n mins ago" + "Mbr needs an update on ETA"), adding "and not close to srv"
-only when the driver is >3.3 km out.
+Dispatched standstill). If the driver is moving while Dispatched, or sitting
+AT LOC / AT DROP OFF, that clause goes on its OWN line, capitalised:
+  "He is moving but didn't change status"
+If the ETA window has passed, the report switches to the 3-line late format
++ "Mbr needs an update on ETA", adding "and not close to srv" only when the
+driver is >3.3 km out. An ETA that passed LESS THAN 3 MIN AGO reads
+"ETA just exceeded" instead of "He exceeded ETA n mins ago" — and a service
+the CONSOLE paints red/orange says "RED ALERT SERVICE" right after the call
+ID, in both the normal and the late format.
+
+CONSOLE DAY GUARD
+The console's Gantt (DHTMLX) day selector follows the BROWSER's local clock, and
+a tracker reload resets it there — so on a machine running Egypt time the board
+lands a day ahead of Houston after every hourly reload, and the app then streams
+the wrong day's services (the console's own 'Today' button jumps to that local
+day too, so it cannot be used to fix it). After every reload, and every 10 min,
+the tracker reads the displayed day and steps the prev/next arrows until it
+reads today in AMERICA/CHICAGO, logging a `day_fix` event when it had to move.
+It never touches a day that is already correct.
 
 CALLBACK SECTION
 Below the drivers: services cleared in the last 12 h (newest first, 20 at a

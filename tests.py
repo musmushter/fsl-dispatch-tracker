@@ -123,6 +123,61 @@ check("T5 RAP skipped", row and row[0]['call_id'] == '777777')
 st = m.State(); st.ingest_service(mk('Spotted', 70, '08pT6', 'D6'))
 check("T6 member waiting", any(a['type'] == 'MEMBER_WAITING' for a in st.snapshot()['alerts']))
 
+# T6b: the RED ALERT marker is a CONSOLE-COLOUR fact, NOT one of the tracker's
+# own alerts. The FSL Gantt writes the service's GanttColor__c straight into the
+# bar's inline background (verified on the live board: normal bars are #228B22
+# with matching payload values), so red/orange = high-risk on the console. A
+# green bar carrying an urgent tracker alert (Jose Mora 504009: DISPATCH_OVERDUE)
+# must NOT be marked; a red bar with no tracker alert at all MUST be.
+# (Must live up here: later tests monkeypatch State.driver_name.)
+def mk_color(color, sid, drv, status='En Route', lmd=20, call='999001'):
+    sa = {'Id': sid, 'AppointmentNumber': 'SA-' + sid, 'D3_Call_ID__c': call,
+          'WorkType': 'Battery Test', 'Status': status, 'StatusCategory': status,
+          'WO_Call_Type__c': 'MEMBER', 'Latitude': 29.674117,
+          'Longitude': -95.268745, 'LastModifiedDate': now - lmd * 60000}
+    if color is not None:
+        sa['GanttColor__c'] = color
+    return {'Resource': '0H' + drv, 'ResourceName': drv, 'Fields': {'s': 1, 'v': sa}}
+
+check("T6b green console bar is NOT red", not m.console_red_alert('#228B22'))
+check("T6b red console bar IS red", m.console_red_alert('#C70606'))
+check("T6b orange console bar IS red", m.console_red_alert('#FFA500'))
+check("T6b blue console bar is NOT red", not m.console_red_alert('#0070D2'))
+check("T6b no/garbage colour is NOT red",
+      not m.console_red_alert(None) and not m.console_red_alert('')
+      and not m.console_red_alert('red') and not m.console_red_alert('#22'))
+
+st = m.State()
+st.ingest_service(mk_color('#228B22', '08pT6b', 'D6b', status='Dispatched', lmd=20))
+row6b = [r for r in st.snapshot()['rows'] if r['driver'] == 'D6b'][0]
+check("T6b-b green bar + DISPATCH_OVERDUE is NOT a red alert",
+      'DISPATCH_OVERDUE' in row6b['alerts'] and row6b['red_alert'] is False,
+      f"-> color={row6b['gantt_color']} alerts={row6b['alerts']} red={row6b['red_alert']}")
+
+st = m.State(); st.ingest_service(mk_color('#C70606', '08pT6d', 'D6d'))
+row6d = [r for r in st.snapshot()['rows'] if r['driver'] == 'D6d'][0]
+check("T6c red bar with no tracker alert IS a red alert",
+      row6d['red_alert'] is True and row6d['alerts'] == [],
+      f"-> alerts={row6d['alerts']} red={row6d['red_alert']}")
+
+st = m.State(); st.ingest_service(mk_color(None, '08pT6e', 'D6e'))
+row6e = [r for r in st.snapshot()['rows'] if r['driver'] == 'D6e'][0]
+check("T6d no colour in the payload -> never red",
+      row6e['red_alert'] is False and row6e['gantt_color'] is None,
+      f"-> color={row6e['gantt_color']} red={row6e['red_alert']}")
+
+# scoping: two live services, only the red-bar one is marked
+st = m.State()
+st.ingest_service(mk_color('#228B22', '08pT6f', 'D6f', call='610001'))
+st.ingest_service(mk_color('#C70606', '08pT6g', 'D6g', call='610002'))
+snap6f = st.snapshot()
+rf = [r for r in snap6f['rows'] if r['call_id'] == '610001'][0]
+rg = [r for r in snap6f['rows'] if r['call_id'] == '610002'][0]
+check("T6e red marker scoped to the red-bar service",
+      rf['red_alert'] is False and rg['red_alert'] is True,
+      f"-> green={rf['red_alert']} red={rg['red_alert']}")
+
+
 # ---- GPS age after normalization: synthesize a ping 25 min old (true time),
 # wall-encoded the way Salesforce does (Central wall clock printed as UTC) ----
 true_ping = now - 25 * 60000
@@ -1365,6 +1420,177 @@ finally:
             os.environ.pop(_k, None)
         else:
             os.environ[_k] = _v
+
+
+# T45: a same-status RE-DISPATCH must refresh the status clock. The SA feed
+# gains another 'changed Status from Dispatched to Dispatched' post and Status
+# never flips, so nothing else can update the In-Status age: the feed loop has
+# to re-read a service whose RECORD was written since our last read. Real case:
+# Thomas Watson 548265 — board said "Dispatched 28 mins", real 10 (feed had a
+# 3:47 PM first dispatch and a 4:05 PM re-dispatch).
+FEED_TWO_DISPATCH = (
+    '<div class="feed">'
+    '<p>Thomas Watson changed  Status from Dispatched to Dispatched .'
+    ' Comment &middot; Like</p><span>Today at 4:05 PM</span>'
+    '<p>Thomas Watson changed  Status from Spotted to Dispatched .'
+    ' Comment &middot; Like</p><span>Today at 3:47 PM</span>'
+    '</div>')
+times45, reassigned45 = m.parse_status_times_from_feed(FEED_TWO_DISPATCH)
+newest = dt.datetime.now(CH).replace(hour=16, minute=5, second=0,
+                                     microsecond=0).timestamp() * 1000
+oldest = dt.datetime.now(CH).replace(hour=15, minute=47, second=0,
+                                     microsecond=0).timestamp() * 1000
+check("T45a parser keeps the LATEST dispatch post",
+      times45.get("Dispatched") == int(newest) != int(oldest),
+      f"-> {times45}")
+check("T45b the re-dispatch is counted (audit only)", reassigned45 == 2,
+      f"-> {reassigned45}")
+
+_ft45 = {"SA-TW": {"Dispatched": int(oldest)}}       # first dispatch on file
+_last_read = now - 20 * 60000                        # we read it 20 min ago
+svc45 = {"sa_id": "SA-TW", "status": "Dispatched", "call_type": "MEMBER",
+         "last_modified": now - 3 * 60000}           # record written 3 min ago
+check("T45c re-dispatch -> feed re-read (priority 2)",
+      m.feed_fetch_priority(svc45, _ft45, {"SA-TW": _last_read}, now)[0] == 2,
+      f"-> {m.feed_fetch_priority(svc45, _ft45, {'SA-TW': _last_read}, now)}")
+
+# record untouched since our read -> no needless re-fetch
+svc45b = dict(svc45, last_modified=_last_read - 60000)
+check("T45d record untouched -> no re-read",
+      m.feed_fetch_priority(svc45b, _ft45, {"SA-TW": _last_read}, now) is None)
+
+# no exact time yet -> highest priority (the original drift fix)
+check("T45e no exact time -> priority 1",
+      m.feed_fetch_priority(svc45, {}, {"SA-TW": _last_read}, now)[0] == 1)
+
+# rate limit holds: read 2 min ago -> nothing, even mid-re-dispatch
+check("T45f per-SA rate limit respected",
+      m.feed_fetch_priority(svc45, _ft45, {"SA-TW": now - 2 * 60000}, now) is None)
+
+# cleared backfill: once each, newest first; RAP/external never
+cl45 = {"sa_id": "SA-C1", "status": "Cleared", "cleared_at": now - 60000}
+cl45b = {"sa_id": "SA-C2", "status": "Cleared", "cleared_at": now - 120000}
+check("T45g cleared service is queued once (priority 3)",
+      m.feed_fetch_priority(cl45, {}, {}, now)[0] == 3)
+check("T45h already-read cleared service is skipped",
+      m.feed_fetch_priority(cl45, {"SA-C1": {"Cleared": now}}, {}, now) is None)
+check("T45i cleared queue is newest-first",
+      m.feed_fetch_priority(cl45b, {}, {}, now)[1]
+      > m.feed_fetch_priority(cl45, {}, {}, now)[1])
+check("T45j RAP + external services are never fetched",
+      m.feed_fetch_priority(dict(cl45, call_type="RAP"), {}, {}, now) is None
+      and m.feed_fetch_priority(cl45, {}, {}, now, is_external=True) is None)
+
+# T46: a SEEDED record must not use its LastModifiedDate when the feed has an
+# exact post for the current status. Seeding stores the record's last WRITE as
+# status_since, so any later write (duration/PTA/field touch) makes the age read
+# far too recent — after every restart, Khalid's 9-min-old En Route showed as 3.
+# A genuinely OBSERVED flip still wins when it is newer than the feed.
+def _svc46(status, since, source):
+    return {"sa_id": "SA-46", "status": status,
+            "status_since": since, "last_modified": since,
+            "status_history": [{"status": status, "t": since, "source": source}]}
+
+_st46 = m.State.__new__(m.State)
+feed46 = int(dt.datetime.now(CH).timestamp() * 1000) - 9 * 60000   # 9 min ago
+_st46.feed_times = {"SA-46": {"En Route": feed46}}
+check("T46a seeded record prefers the feed post over LastModifiedDate",
+      m.State.status_epoch(_st46, _svc46("En Route", feed46 + 6 * 60000, "seed"))
+      == feed46)
+check("T46b observed flip stays authoritative when NEWER than the feed",
+      m.State.status_epoch(_st46, _svc46("En Route", feed46 + 3 * 60000, "watch"))
+      == feed46 + 3 * 60000)
+check("T46c observed flip loses to a NEWER feed post (missed re-dispatch)",
+      m.State.status_epoch(_st46, _svc46("En Route", feed46 - 3 * 60000, "watch"))
+      == feed46)
+check("T46d no feed post -> seeded LastModifiedDate is still the fallback",
+      m.State.status_epoch(m.State.__new__(m.State),
+                           _svc46("En Route", feed46 + 6 * 60000, "seed"))
+      == feed46 + 6 * 60000)
+_st46e = m.State()
+_st46e.ingest_service(mk('Dispatched', 4, '08pT46', 'D46'))
+check("T46e a fresh ingest is tagged 'seed'",
+      _st46e.services['08pT46']['status_history'][-1]['source'] == 'seed',
+      f"-> {_st46e.services['08pT46']['status_history'][-1]}")
+_st46e.ingest_service(mk('En Route', 1, '08pT46', 'D46'))
+check("T46f a live flip is tagged 'watch'",
+      _st46e.services['08pT46']['status_history'][-1]['source'] == 'watch',
+      f"-> {_st46e.services['08pT46']['status_history'][-1]}")
+
+# status_epoch must hand the NEWEST dispatch time to the row build
+_st45 = m.State.__new__(m.State)          # bare instance: no name stubs involved
+_st45.feed_times = {"SA-TW": {"Dispatched": int(newest)}}
+check("T45k status_epoch uses the latest dispatch post",
+      m.State.status_epoch(_st45, {"sa_id": "SA-TW", "status": "Dispatched"})
+      == int(newest),
+      f"-> {m.State.status_epoch(_st45, {'sa_id': 'SA-TW', 'status': 'Dispatched'})}")
+
+
+# T47: the LANE BACKFILL has to exist for real. Its roster path was missing
+# from current_paths(), so both the load and the save blew up inside bare
+# excepts and the loop swept an always-empty roster — i.e. after a restart a
+# driver's earlier leg stayed missing while a later one streamed in via deltas,
+# and the tow-pair logic followed the WRONG leg (Paul Edwards 545785: second leg
+# Dispatched on the board, head leg actually On Location).
+check("T47a current_paths() exposes the roster file",
+      "roster" in m.current_paths()
+      and m.current_paths()["roster"].endswith("roster.json"),
+      f"-> {m.current_paths().get('roster')}")
+
+_roster = {"r1": {"name": "A"}, "r2": {"name": "B"}, "r3": {"name": "C"}}
+_active = {"r2"}                       # r2 has an active service (the Paul case)
+t47 = m.backfill_targets(_roster, set(), _active)
+check("T47b a cold run sweeps EVERY lane, even ones with an active service",
+      set(t47) == {"r1", "r2", "r3"} and "r2" in t47, f"-> {t47}")
+t47b = m.backfill_targets(_roster, {"r1", "r2", "r3"}, _active)
+check("T47c once covered, lanes with an active service are skipped",
+      t47b == ["r1", "r3"], f"-> {t47b}")
+t47c = m.backfill_targets({"a%d" % i: {} for i in range(10)}, set(), set())
+check("T47d the sweep is rate-limited per cycle", len(t47c) == 4, f"-> {t47c}")
+check("T47g the lane RPC only runs with ITS action's ctx (never another's)",
+      m.backfill_ctx_ok("FSL.ctrl079_ResourceCalendar")
+      and not m.backfill_ctx_ok("FSL.ctrl001_Gantt")
+      and not m.backfill_ctx_ok(None))
+
+# the roster must actually persist through the real path
+_st47 = m.State()
+_st47.ingest_service(mk('Dispatched', 5, '08pT47', 'D47'))
+_saved = json.load(open(m.current_paths()["roster"], encoding="utf-8"))
+check("T47e ingesting a service writes the roster to disk",
+      any(v.get("name") == "D47" for v in _saved.values()), f"-> {list(_saved)[:3]}")
+_st47b = m.State()
+check("T47f a new process loads the roster back",
+      _st47b.roster.get("0HD47", {}).get("name") == "D47",
+      f"-> {_st47b.roster.get('0HD47')}")
+
+# T48: the console DAY guard. A reload leaves the DHTMLX board on the browser's
+# LOCAL day, and the app's own 'Today' button jumps there too (measured live: it
+# went to Fri Oct 9 while Houston was still Thu Oct 8), so the board can sit on
+# the wrong day and the app streams the wrong day's services until someone
+# switches it by hand. The guard steps the prev/next arrows to Houston's today.
+check("T48a parses the DHTMLX day header",
+      m.parse_console_day("Thu, October 8, 2026") == dt.date(2026, 10, 8)
+      and m.parse_console_day("Wed, Oct 7, 2026") == dt.date(2026, 10, 7),
+      f"-> {m.parse_console_day('Thu, October 8, 2026')}")
+check("T48b junk / empty header -> None (never guess a day)",
+      m.parse_console_day(None) is None and m.parse_console_day("") is None
+      and m.parse_console_day("WEEK 41") is None
+      and m.parse_console_day("Smarch 12, 2026") is None)
+check("T48c console AHEAD of Houston -> step BACK (the reported case)",
+      m.day_step_selector(dt.date(2026, 10, 9), dt.date(2026, 10, 8))
+      == ".dhx_cal_prev_button")
+check("T48d console BEHIND Houston -> step FORWARD",
+      m.day_step_selector(dt.date(2026, 10, 7), dt.date(2026, 10, 8))
+      == ".dhx_cal_next_button")
+check("T48e already on Houston's today -> no click at all",
+      m.day_step_selector(dt.date(2026, 10, 8), dt.date(2026, 10, 8)) is None)
+check("T48f multi-day drift still lands on the target (loop, not one click)",
+      m.day_step_selector(dt.date(2026, 10, 12), dt.date(2026, 10, 8))
+      == ".dhx_cal_prev_button")
+check("T48g the click JS targets the gantt iframe with its own MouseEvent",
+      ".dhx_cal_prev_button" in m.console_day_click_js(".dhx_cal_prev_button", 1)
+      and "contentWindow.MouseEvent" in m.console_day_click_js(".dhx_cal_prev_button", 1)
+      and "dhx_cal_date" in m.CONSOLE_DAY_FRAME_JS)
 
 
 # Summary LAST: any check placed after this point runs UNCOUNTED and the
